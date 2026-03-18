@@ -17,7 +17,7 @@ import { CamPlayer } from './player.js';
 import { NotificationManager } from './notifications.js';
 import { SEARCH_DEBOUNCE_MS, VERSION } from './config.js';
 
-(window._oko = window._oko || {}).app = 'a5e5';
+(window._oko = window._oko || {}).app = 'a5e6';
 
 export class App {
   constructor() {
@@ -233,9 +233,11 @@ export class App {
         // NVR came back — queue for staggered restart
         cam.el.classList.remove('nvr-offline');
         toRestart.push(cam);
-      } else if (!isOffline && !cam.player.connected && cam.player.enabled && !cam.el.classList.contains('hidden')) {
+      } else if (!isOffline && !cam.player.connected && cam.player.enabled
+        && !cam.el.classList.contains('hidden')
+        && !cam.el.classList.contains('playback-mode')) {
         // Stuck camera: enabled but not connected, NVR is online
-        // This catches cameras that got "nvr unreachable" but circuit breaker didn't trip
+        // Skip cameras in playback mode — their SD player is intentionally stopped
         toRestart.push(cam);
       }
     }

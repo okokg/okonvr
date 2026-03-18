@@ -10,7 +10,7 @@
 
 import { CamPlayer } from './player.js';
 
-(window._oko = window._oko || {}).cameraView = 'v3c2';
+(window._oko = window._oko || {}).cameraView = 'v3c3';
 
 export class CameraView {
   /**
@@ -59,6 +59,7 @@ export class CameraView {
 
   /** Stop ALL streaming (SD + HD + playback) and mark disabled. */
   disable() {
+    clearInterval(this._nowMarkerTimer);
     if (this._hdPlayer) {
       this._hdPlayer.disable();
       this._hdPlayer = null;
@@ -433,6 +434,10 @@ export class CameraView {
 
     this.el.classList.add('playback-mode');
 
+    // Real-time now marker update (moves the "now" line on today's timeline)
+    clearInterval(this._nowMarkerTimer);
+    this._nowMarkerTimer = setInterval(() => this._updateSeekAvailability(), 30000);
+
     // Show resolution instead of SD/HD toggle
     this._qualityToggle.dataset.mode = 'playback';
     this._qualityToggle.innerHTML = `<span class="quality-res">${resolution === 'original' ? 'Original' : resolution}</span>`;
@@ -465,6 +470,7 @@ export class CameraView {
   /** Switch back to live. */
   stopPlayback() {
     this.stopPlaybackTimer();
+    clearInterval(this._nowMarkerTimer);
     if (this._playbackPlayer) {
       this._playbackPlayer.disable();
       this._playbackPlayer = null;
