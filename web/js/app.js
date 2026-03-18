@@ -15,7 +15,9 @@ import { CameraGrid } from './grid.js';
 import { CameraView } from './camera-view.js';
 import { CamPlayer } from './player.js';
 import { NotificationManager } from './notifications.js';
-import { SEARCH_DEBOUNCE_MS } from './config.js';
+import { SEARCH_DEBOUNCE_MS, VERSION } from './config.js';
+
+(window._oko = window._oko || {}).app = 'a5e4';
 
 export class App {
   constructor() {
@@ -36,6 +38,10 @@ export class App {
 
   /** Start the application. */
   async start() {
+    // Log version and file hashes
+    const mods = Object.entries(window._oko || {}).map(([k, v]) => `${k}:${v}`).join(' ');
+    console.log(`%c[oko] v${VERSION}%c ${mods}`, 'color: #00d4aa; font-weight: bold', 'color: inherit');
+
     // Load UI config from backend (oko.yaml)
     this._uiConfig = await this.api.getUiConfig().catch(() => null) || {};
     this._applyUiConfig();
@@ -65,6 +71,46 @@ export class App {
     // Sync camera list periodically (detects oko.yaml hot reload)
     const syncMs = this._uiConfig.sync_interval || 15000;
     this._syncInterval = setInterval(() => this._syncCameras(), syncMs);
+
+    // Server stats to devtools console
+    this._logServerStats(); // first call immediately
+    this._statsInterval = setInterval(() => this._logServerStats(), 10000);
+  }
+
+  /** Fetch and log server stats to browser console. */
+  async _logServerStats() {
+    try {
+      const s = await this.api.getStats();
+      if (!s) { console.warn('[server] stats: null response'); return; }
+      if (s.error) { console.warn('[server] stats error:', s.error); return; }
+
+      const st = s.streams;
+      const sys = s.system;
+
+      // NVR: "ТСЖ(✓32/32) Дача(✗0/16)"
+      const nvrParts = s.nvrs.map(n => {
+        const icon = n.status === 'online' ? '✓' : n.status === 'offline' ? '✗' : '?';
+        return `${n.name}(${icon}${n.streams}/${n.cameras})`;
+      });
+
+      // Session streams: "__hd_M2[1→1]"
+      const activeParts = (s.active || [])
+        .map(a => `${a.name}[${a.producers}→${a.consumers}]`)
+        .join(' ');
+
+      console.log(
+        `%c[server]%c ` +
+        `cpu:${sys.host_cpu || '?'} load:${sys.load} mem:${sys.host_mem} | ` +
+        `backend: cpu=${sys.backend_cpu} rss=${sys.backend_rss} heap=${sys.backend_heap} up=${sys.uptime} | ` +
+        `streams: ${st.sd}sd ${st.hd}hd ${st.playback}pb ${st.transcode}tc | ` +
+        `NVR: ${nvrParts.join(' ')}` +
+        (activeParts ? ` | ${activeParts}` : ''),
+        'color: #00d4aa; font-weight: bold',
+        'color: inherit'
+      );
+    } catch (err) {
+      console.warn('[server] stats failed:', err.message);
+    }
   }
 
   /** Apply UI settings from oko.yaml. localStorage overrides config. */
@@ -125,6 +171,92 @@ export class App {
       stagger_ms: newUi.stagger_ms || 500,
       bitrate_interval: newUi.bitrate_interval || 5000,
     };
+  }
+
+  /** Apply NVR health status to cameras and NVR buttons. */
+  _applyNvrHealth(statuses) {
+    if (!statuses || statuses.length === 0) return;
+
+    // Combine: backend offline + frontend circuit breaker
+    const backendOffline = new Set();
+    for (const s of statuses) {
+      if (s.status === 'offline') backendOffline.add(s.name);
+    }
+
+    // Frontend CB offline = groups disabled by connection error detection
+    const frontendOffline = this._frontendOfflineNvrs || new Set();
+
+    // Merged: offline if EITHER backend or frontend says so
+    const offlineNvrs = new Set([...backendOffline, ...frontendOffline]);
+
+    const wasOffline = this._offlineNvrs || new Set();
+    this._offlineNvrs = offlineNvrs;
+
+    // Update NVR buttons
+    for (const s of statuses) {
+      const btn = document.querySelector(`.group-btn[data-group="${s.name}"]`);
+      if (btn) {
+        const isOff = offlineNvrs.has(s.name);
+        btn.classList.toggle('nvr-offline', isOff);
+        if (isOff) {
+          const source = backendOffline.has(s.name) ? 'health check' : 'stream errors';
+          btn.title = `${s.name} — OFFLINE (${source})`;
+        } else {
+          btn.title = `Show only ${s.name} cameras (click again to show all)`;
+        }
+      }
+    }
+
+    // If backend says online AND frontend CB was triggered → clear frontend CB
+    // (meaning NVR TCP is up, let cameras try again)
+    for (const group of frontendOffline) {
+      if (!backendOffline.has(group)) {
+        // Backend says TCP is up — give cameras another chance
+        // They'll re-trigger CB if RTSP still fails
+        frontendOffline.delete(group);
+      }
+    }
+    this._frontendOfflineNvrs = frontendOffline;
+
+    // Cameras in offline NVRs: force-stop on EVERY cycle. Online: staggered restart.
+    const toRestart = [];
+
+    for (const cam of this.grid.cameras) {
+      const isOffline = offlineNvrs.has(cam.group);
+      const wasOff = wasOffline.has(cam.group);
+
+      if (isOffline) {
+        // Force-stop every cycle — catches cameras that started retrying
+        cam.el.classList.add('nvr-offline');
+        cam.disable();
+        cam._showLoading('nvr offline');
+      } else if (!isOffline && wasOff) {
+        // NVR came back — queue for staggered restart
+        cam.el.classList.remove('nvr-offline');
+        toRestart.push(cam);
+      } else if (!isOffline && !cam.player.connected && cam.player.enabled && !cam.el.classList.contains('hidden')) {
+        // Stuck camera: enabled but not connected, NVR is online
+        // This catches cameras that got "nvr unreachable" but circuit breaker didn't trip
+        toRestart.push(cam);
+      }
+    }
+
+    // Update header counters
+    this.grid._updateStats();
+
+    // Staggered restart to avoid NVR overload
+    if (toRestart.length > 0) {
+      const staggerMs = window.__okoConfig?.stagger_ms || 500;
+      console.log(`[app] NVR recovery: restarting ${toRestart.length} cameras (stagger ${staggerMs}ms)`);
+      toRestart.forEach((cam, i) => {
+        setTimeout(() => {
+          if (cam.player.connected) return; // connected in the meantime
+          console.log(`[app] ${cam.id}: restarting (${i + 1}/${toRestart.length})`);
+          cam.player.stop();
+          cam.start();
+        }, i * staggerMs);
+      });
+    }
   }
 
   // ── Camera loading ──
@@ -189,6 +321,10 @@ export class App {
       // Sync UI config
       const newUi = await this.api.getUiConfig().catch(() => null);
       if (newUi) this._syncUiConfig(newUi);
+
+      // Sync NVR health
+      const nvrHealth = await this.api.getNvrHealth().catch(() => []);
+      this._applyNvrHealth(nvrHealth);
 
       const configs = await this.api.getCameras();
 
@@ -288,6 +424,65 @@ export class App {
       } catch (err) {
         console.error(`[app] Transcode failed for ${cam.id}:`, err);
       }
+    };
+
+    // Track connection errors per NVR group → frontend circuit breaker
+    // Sliding window: store timestamps of each error, check multiple tiers
+    this._groupErrorLog = {}; // { groupName: [timestamp, timestamp, ...] }
+
+    this.grid.onConnectionError = (cam) => {
+      const group = cam.group;
+      if (!group) return;
+      // Already tripped
+      if (this._offlineNvrs && this._offlineNvrs.has(group)) return;
+
+      const now = Date.now();
+      if (!this._groupErrorLog[group]) this._groupErrorLog[group] = [];
+      this._groupErrorLog[group].push(now);
+
+      // Trim old entries (older than 60s)
+      this._groupErrorLog[group] = this._groupErrorLog[group].filter(t => now - t < 60000);
+
+      const errors = this._groupErrorLog[group];
+      const last10s = errors.filter(t => now - t < 10000).length;
+      const last15s = errors.filter(t => now - t < 15000).length;
+      const last30s = errors.filter(t => now - t < 30000).length;
+
+      // Multi-tier detection: trip on whichever fires first
+      const tripped = (last10s >= 5) || (last15s >= 8) || (last30s >= 12);
+
+      if (!tripped) {
+        console.log(`[app] ${cam.id}: NVR "${group}" connection error (10s:${last10s} 15s:${last15s} 30s:${last30s})`);
+        return;
+      }
+
+      console.log(`[app] NVR "${group}": circuit breaker tripped (10s:${last10s} 15s:${last15s} 30s:${last30s})`);
+      this._groupErrorLog[group] = []; // reset
+
+      // Mark group as frontend-offline (will be merged with backend health in _applyNvrHealth)
+      if (!this._frontendOfflineNvrs) this._frontendOfflineNvrs = new Set();
+      this._frontendOfflineNvrs.add(group);
+
+      // Also update _offlineNvrs immediately so the force-stop loop works
+      if (!this._offlineNvrs) this._offlineNvrs = new Set();
+      this._offlineNvrs.add(group);
+
+      for (const c of this.grid.cameras) {
+        if (c.group === group) {
+          c.el.classList.add('nvr-offline');
+          c.disable();
+          c._showLoading('nvr offline');
+        }
+      }
+
+      // Update NVR button
+      const btn = document.querySelector(`.group-btn[data-group="${group}"]`);
+      if (btn) {
+        btn.classList.add('nvr-offline');
+        btn.title = `${group} — OFFLINE (detected from stream errors)`;
+      }
+
+      this.grid._updateStats();
     };
   }
 
@@ -608,13 +803,17 @@ export class App {
   async _toggleHd(cam, wantHd) {
     if (wantHd) {
       try {
+        console.log(`[app] ${cam.id}: HD stream requested`);
         const result = await this.api.createHdStream(cam.id);
+        console.log(`[app] ${cam.id}: HD stream=${result.stream} codec=${result.codec} forceMSE=${result.forceMSE}`);
         cam.startHd(result.stream, result.forceMSE);
         this._showHint(`${cam.id} → HD`);
       } catch (err) {
+        console.error(`[app] ${cam.id}: HD failed: ${err.message}`);
         this._showHint(`HD error: ${err.message}`);
       }
     } else {
+      console.log(`[app] ${cam.id}: HD stream stopped`);
       await this.api.deleteHdStream(cam.id);
       cam.stopHd();
       this._showHint(`${cam.id} → SD`);
@@ -630,12 +829,14 @@ export class App {
         await new Promise(r => setTimeout(r, 300));
       }
 
+      console.log(`[app] ${cam.id}: playback ${start} → ${end} (${resolution})`);
       const result = await this.api.createPlayback(cam.id, start, end, resolution);
+      console.log(`[app] ${cam.id}: playback stream=${result.stream} codec=${result.codec} forceMSE=${result.forceMSE}`);
       cam.startPlayback(result.stream, new Date(start), new Date(end), result.forceMSE, resolution);
       this.grid.updatePlaybackHash();
       this._showHint(`Playback: ${cam.id} ${resolution !== 'original' ? resolution : ''}`);
     } catch (err) {
-      console.error(`Playback failed for ${cam.id}:`, err);
+      console.error(`[app] ${cam.id}: playback failed: ${err.message}`);
       this._showHint(`Playback error: ${err.message}`);
     }
   }
@@ -679,9 +880,12 @@ export class App {
 
   /** Cleanup all playback streams on page unload. */
   _bindPageUnload() {
-    window.addEventListener('beforeunload', () => {
-      navigator.sendBeacon?.('/backend/playback/cleanup', '');
-    });
+    // Clean up HD/playback/transcode streams on tab close
+    const cleanup = () => navigator.sendBeacon?.('/backend/cleanup-session', '');
+
+    window.addEventListener('beforeunload', cleanup);
+    // pagehide fires more reliably on mobile than beforeunload
+    window.addEventListener('pagehide', cleanup);
   }
 
   // ── Clock ──

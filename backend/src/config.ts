@@ -12,6 +12,8 @@ export interface UiConfig {
   stagger_ms: number;
   bitrate_interval: number;
   sync_interval: number;
+  nvr_health_interval: number;
+  nvr_health_failures: number;
 }
 
 export interface OkoConfig {
@@ -114,6 +116,8 @@ function normalizeConfig(yaml: any): OkoConfig {
       stagger_ms: yaml.ui?.stagger_ms ?? 500,
       bitrate_interval: yaml.ui?.bitrate_interval ?? 5000,
       sync_interval: yaml.ui?.sync_interval ?? 15000,
+      nvr_health_interval: yaml.ui?.nvr_health_interval ?? 30000,
+      nvr_health_failures: yaml.ui?.nvr_health_failures ?? 3,
     },
   };
 }

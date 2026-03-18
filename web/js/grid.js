@@ -16,6 +16,8 @@ import {
   TIMELINE_RENDER_INTERVAL_MS, SWIPE_THRESHOLD_PX,
 } from './config.js';
 
+(window._oko = window._oko || {}).grid = 'g2d0';
+
 export class CameraGrid {
   /**
    * @param {HTMLElement} gridEl - Grid container element
@@ -102,6 +104,9 @@ export class CameraGrid {
       };
       view.onNeedTranscode = (cam) => {
         if (this.onNeedTranscode) this.onNeedTranscode(cam);
+      };
+      view.onConnectionError = (cam) => {
+        if (this.onConnectionError) this.onConnectionError(cam);
       };
 
       this.cameras.push(view);
@@ -441,9 +446,10 @@ export class CameraGrid {
   // ── Private: stats ──
 
   _updateStats() {
-    const enabled = this.cameras.filter(c => c.isEnabled);
-    const online = enabled.filter(c => c.isConnected).length;
-    const offline = enabled.length - online;
+    const nvrOffline = this.cameras.filter(c => c.el.classList.contains('nvr-offline')).length;
+    const active = this.cameras.filter(c => !c.el.classList.contains('nvr-offline'));
+    const online = active.filter(c => c.isConnected).length;
+    const offline = active.filter(c => c.isEnabled && !c.isConnected).length + nvrOffline;
     if (this.onStatsChange) this.onStatsChange(online, offline);
     this.updateVisibility();
   }
@@ -572,6 +578,7 @@ export class CameraGrid {
   _startPeriodicTasks() {
     // bitrate + total bandwidth
     const bitrateMs = window.__okoConfig?.bitrate_interval || BITRATE_INTERVAL_MS;
+
     setInterval(async () => {
       let total = 0;
       for (const cam of this.cameras) {

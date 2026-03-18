@@ -9,6 +9,8 @@ let _uiConfig: UiConfig = {
   stagger_ms: 500,
   bitrate_interval: 5000,
   sync_interval: 15000,
+  nvr_health_interval: 30000,
+  nvr_health_failures: 3,
 };
 
 export function setUiConfig(config: UiConfig) {

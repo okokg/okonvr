@@ -5,6 +5,8 @@
 
 import { BACKEND_URL } from './config.js';
 
+(window._oko = window._oko || {}).api = 'i1f0';
+
 export class ApiClient {
   /**
    * Fetch camera list from backend (go2rtc streams + stored metadata).
@@ -126,5 +128,28 @@ export class ApiClient {
     });
     if (!res.ok) throw new Error(await res.text());
     return res.json();
+  }
+
+  /** Get NVR health status. */
+  async getNvrHealth() {
+    const res = await fetch(`${BACKEND_URL}/health/nvrs`);
+    if (!res.ok) return [];
+    return res.json();
+  }
+
+  /** Get server statistics (streams, connections, NVR status). */
+  async getStats() {
+    const res = await fetch(`${BACKEND_URL}/stats`);
+    if (!res.ok) return null;
+    return res.json();
+  }
+
+  /** Report NVR failure (mass 500s detected by frontend). */
+  async reportNvrFailure(nvrName) {
+    fetch(`${BACKEND_URL}/health/nvr-failure`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ nvr: nvrName }),
+    }).catch(() => {});
   }
 }

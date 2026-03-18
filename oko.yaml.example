@@ -26,6 +26,8 @@ ui:
   stagger_ms: 500                # delay between camera connections (ms)
   bitrate_interval: 5000         # bitrate refresh interval (ms)
   sync_interval: 15000           # camera list sync interval (ms)
+  nvr_health_interval: 30000     # NVR health check interval (ms)
+  nvr_health_failures: 3         # failures before marking NVR offline
 
 # ── NVR list ──
 nvrs:

@@ -10,6 +10,8 @@
 
 import { CamPlayer } from './player.js';
 
+(window._oko = window._oko || {}).cameraView = 'v3c2';
+
 export class CameraView {
   /**
    * @param {object} config - { id, label, group, sort_order, has_audio }
@@ -29,6 +31,7 @@ export class CameraView {
     // cache DOM refs
     this._statusDot = this.el.querySelector('.cam-status');
     this._loading = this.el.querySelector('.cam-loading');
+    this._loadingText = this.el.querySelector('.cam-loading-text');
     this._audioIcon = this.el.querySelector('.cam-audio-wrap');
     this._modeBadge = this.el.querySelector('.cam-mode');
     this._bitrateEl = this.el.querySelector('.cam-bitrate');
@@ -54,8 +57,20 @@ export class CameraView {
   /** Start streaming. Transcode is triggered reactively if codec mismatch detected. */
   start() { this.player.start(); }
 
-  /** Stop streaming and mark disabled. */
-  disable() { this.player.disable(); }
+  /** Stop ALL streaming (SD + HD + playback) and mark disabled. */
+  disable() {
+    if (this._hdPlayer) {
+      this._hdPlayer.disable();
+      this._hdPlayer = null;
+      this._hdStream = null;
+    }
+    if (this._playbackPlayer) {
+      this._playbackPlayer.disable();
+      this._playbackPlayer = null;
+    }
+    this.player.disable();
+    this._stopRenderCheck();
+  }
 
   /** @returns {boolean} Whether the camera is currently connected. */
   get isConnected() { return this.player.connected; }
@@ -108,15 +123,22 @@ export class CameraView {
 
     this._hdStream = streamName;
     this.player.stop();
+    this._showLoading('switching to hd');
 
     this._hdPlayer = new CamPlayer(this.video, streamName, { preferH265: forceMSE });
     this._hdPlayer.onStatusChange = (online) => {
       this._statusDot.classList.toggle('live', online);
-      this._loading.style.display = online ? 'none' : 'block';
     };
     this._hdPlayer.onModeChange = (mode) => {
       this._modeBadge.textContent = `${mode.toUpperCase()} ●LIVE HD`;
       this._modeBadge.className = `cam-mode ${mode}`;
+    };
+    this._hdPlayer.onStage = (stage) => {
+      if (stage === 'playing') {
+        this._hideLoading();
+      } else {
+        this._showLoading(stage);
+      }
     };
 
     if (forceMSE && !CamPlayer.h265WebRTCSupported) {
@@ -138,6 +160,9 @@ export class CameraView {
       this._hdPlayer = null;
     }
     this._hdStream = null;
+
+    // Show loading while SD reconnects
+    this._showLoading('switching to sd');
 
     // Restart SD player
     this.player.start();
@@ -163,6 +188,37 @@ export class CameraView {
     this.player = new CamPlayer(this.video, newStreamName);
     this._bindPlayerEvents();
     this.player.start();
+  }
+
+  /** Show loading spinner with status text. */
+  _showLoading(text) {
+    this._loadingText.textContent = text;
+    this._loading.style.display = 'flex';
+    // Don't poll for video render if camera is disabled (NVR offline)
+    if (this.player.enabled) this._startRenderCheck();
+  }
+
+  /** Hide loading spinner. */
+  _hideLoading() {
+    this._loading.style.display = 'none';
+    this._stopRenderCheck();
+  }
+
+  /** Poll until video actually has frames, then hide loading. */
+  _startRenderCheck() {
+    this._stopRenderCheck();
+    this._renderCheckTimer = setInterval(() => {
+      if (this.video.videoWidth > 0 && this.video.videoHeight > 0) {
+        this._hideLoading();
+      }
+    }, 500);
+  }
+
+  _stopRenderCheck() {
+    if (this._renderCheckTimer) {
+      clearInterval(this._renderCheckTimer);
+      this._renderCheckTimer = null;
+    }
   }
 
   /** Update bitrate display. Call periodically. */
@@ -233,13 +289,28 @@ export class CameraView {
   }
 
   /** Sync MSE buffer to prevent lag buildup. */
+  /** Sync MSE buffer — prevent live drift. Called periodically. */
   syncBuffer() {
+    const p = this._playbackPlayer || this._hdPlayer || this.player;
+    // Only sync for MSE live streams, not playback (archive)
+    if (p.mode !== 'mse' || this.isPlayback) return;
+
     const v = this.video;
-    if (v.buffered.length > 0) {
-      const end = v.buffered.end(v.buffered.length - 1);
-      if (end - v.currentTime > 3) {
-        v.currentTime = end - 0.5;
-      }
+    if (!v.buffered.length) return;
+
+    const end = v.buffered.end(v.buffered.length - 1);
+    const lag = end - v.currentTime;
+
+    if (lag > 5) {
+      // Way behind — hard seek
+      v.currentTime = end - 0.3;
+      v.playbackRate = 1.0;
+    } else if (lag > 1.5) {
+      // Drifting — speed up to catch up smoothly
+      v.playbackRate = 1.05;
+    } else if (lag < 0.5 && v.playbackRate !== 1.0) {
+      // Caught up — normal speed
+      v.playbackRate = 1.0;
     }
   }
 
@@ -287,6 +358,12 @@ export class CameraView {
    */
   onQuickSeek = null;
 
+  /**
+   * Called when NVR connection error detected (dial tcp, i/o timeout, etc).
+   * @type {(camera: CameraView) => void}
+   */
+  onConnectionError = null;
+
   // ── Playback ──
 
   _playbackStream = null;
@@ -330,15 +407,21 @@ export class CameraView {
       this._hdPlayer = null;
       this._hdStream = null;
     }
+    this._showLoading('loading archive');
     this._playbackPlayer = new CamPlayer(this.video, streamName, { preferH265: forceMSE });
     this._playbackPlayer.onStatusChange = (online) => {
       this._statusDot.classList.toggle('live', online);
-      this._loading.style.display = online ? 'none' : 'block';
     };
     this._playbackPlayer.onModeChange = (mode) => {
-      // Badge shows archive time, updated by position timer
       this._modeBadge.className = 'cam-mode playback';
       this._updatePlaybackBadge(mode);
+    };
+    this._playbackPlayer.onStage = (stage) => {
+      if (stage === 'playing') {
+        this._hideLoading();
+      } else {
+        this._showLoading(stage);
+      }
     };
 
     // HEVC → use MSE only if browser doesn't support H.265 WebRTC
@@ -563,7 +646,13 @@ export class CameraView {
     el.draggable = true;
 
     el.innerHTML = `
-      <div class="cam-loading">connecting&hellip;</div>
+      <div class="cam-loading">
+        <svg class="cam-spinner" viewBox="0 0 36 36">
+          <circle cx="18" cy="18" r="14" fill="none" stroke="rgba(255,171,0,0.15)" stroke-width="3"/>
+          <circle cx="18" cy="18" r="14" fill="none" stroke="var(--warn)" stroke-width="3" stroke-dasharray="22 66" stroke-linecap="round"/>
+        </svg>
+        <span class="cam-loading-text">connecting</span>
+      </div>
       <video muted autoplay playsinline></video>
       <div class="cam-bitrate"></div>
       <div class="cam-top-right">
@@ -640,7 +729,6 @@ export class CameraView {
   _bindPlayerEvents() {
     this.player.onStatusChange = (online) => {
       this._statusDot.classList.toggle('live', online);
-      this._loading.style.display = online ? 'none' : 'block';
       this.timeline.push({ time: Date.now(), online });
       if (this.onStatusChange) this.onStatusChange(this, online);
     };
@@ -650,8 +738,20 @@ export class CameraView {
       this._modeBadge.className = `cam-mode ${mode}`;
     };
 
+    this.player.onStage = (stage) => {
+      if (stage === 'playing') {
+        this._hideLoading();
+      } else {
+        this._showLoading(stage);
+      }
+    };
+
     this.player.onNeedTranscode = () => {
       if (this.onNeedTranscode) this.onNeedTranscode(this);
+    };
+
+    this.player.onConnectionError = (name) => {
+      if (this.onConnectionError) this.onConnectionError(this);
     };
   }
 

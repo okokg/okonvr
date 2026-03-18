@@ -3,16 +3,18 @@ import { loadConfig } from './config';
 import { initDb, ensureCameraRows } from './db';
 import { createProvider } from './providers';
 import { registry } from './services/camera-registry';
-import { initStreamManager, cleanupAllInternal } from './services/stream-manager';
+import { initStreamManager, cleanupAllInternal, reapOrphanStreams } from './services/stream-manager';
 import { generateGo2rtcConfig } from './services/go2rtc-config';
 import { startConfigWatcher } from './services/config-watcher';
 import { probeCodecs } from './services/codec-prober';
 import { setUiConfig } from './services/config-store';
+import { startNvrHealth } from './services/nvr-health';
 import { cameraRoutes } from './routes/cameras';
 import { playbackRoutes } from './routes/playback';
 import { hdStreamRoutes } from './routes/hd-stream';
 import { transcodeRoutes } from './routes/transcode';
 import { healthRoutes } from './routes/health';
+import { statsRoutes } from './routes/stats';
 
 async function main() {
   const config = loadConfig();
@@ -73,14 +75,19 @@ async function main() {
   await fastify.register(hdStreamRoutes);
   await fastify.register(transcodeRoutes);
   await fastify.register(healthRoutes);
+  await fastify.register(statsRoutes);
 
   await fastify.listen({ port: config.server.port, host: '0.0.0.0' });
   console.log(`Backend listening on port ${config.server.port}`);
 
   // Watch oko.yaml for live changes
   startConfigWatcher(config);
+  startNvrHealth();
 
   setTimeout(() => cleanupAllInternal(), 3000);
+
+  // Reap orphaned HD/playback/transcode streams every 15s (30s TTL)
+  setInterval(() => reapOrphanStreams(30000), 15000);
 
   // Background: probe codecs for all cameras (detects audio)
   setTimeout(() => probeAllCodecs(), 10000);

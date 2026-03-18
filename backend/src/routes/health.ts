@@ -1,8 +1,9 @@
 import { FastifyInstance } from 'fastify';
 import { db, stmts } from '../db';
-import { checkHealth } from '../services/stream-manager';
+import { checkHealth, cleanupSessionStreams } from '../services/stream-manager';
 import { clearCodecCache } from '../services/codec-prober';
 import { getUiConfig } from '../services/config-store';
+import { getNvrStatuses } from '../services/nvr-health';
 
 export async function healthRoutes(fastify: FastifyInstance) {
   fastify.get('/health', async () => {
@@ -16,6 +17,9 @@ export async function healthRoutes(fastify: FastifyInstance) {
     };
   });
 
+  /** NVR health status — circuit breaker state for each NVR. */
+  fastify.get('/health/nvrs', async () => getNvrStatuses());
+
   /** UI configuration from oko.yaml. */
   fastify.get('/config/ui', async () => getUiConfig());
 
@@ -26,5 +30,11 @@ export async function healthRoutes(fastify: FastifyInstance) {
     const affected = db.prepare('SELECT changes() as n').get() as any;
     console.log(`[reset-codecs] Cleared codec cache for all cameras`);
     return { ok: true, cleared: affected?.n || 0 };
+  });
+
+  /** Cleanup all client-session streams (HD, playback, transcode). Called on tab close via sendBeacon. */
+  fastify.post('/cleanup-session', async () => {
+    await cleanupSessionStreams();
+    return { ok: true };
   });
 }

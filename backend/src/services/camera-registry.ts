@@ -1,4 +1,4 @@
-import { NvrProvider, NvrEntry, CameraConfig } from '../providers';
+import { NvrProvider, NvrEntry, NvrConfig, CameraConfig } from '../providers';
 import { createProvider } from '../providers';
 
 interface CameraEntry {
@@ -13,7 +13,7 @@ interface CameraEntry {
  */
 class CameraRegistry {
   private map = new Map<string, CameraEntry>();
-  private providers: { name: string; provider: NvrProvider; cameras: CameraConfig[] }[] = [];
+  private providers: { name: string; provider: NvrProvider; cameras: CameraConfig[]; config: NvrConfig }[] = [];
 
   /** Initialize from NVR entries (parsed from oko.yaml). */
   init(nvrs: NvrEntry[]) {
@@ -22,7 +22,7 @@ class CameraRegistry {
 
     for (const nvr of nvrs) {
       const provider = createProvider(nvr.config);
-      this.providers.push({ name: nvr.name, provider, cameras: nvr.cameras });
+      this.providers.push({ name: nvr.name, provider, cameras: nvr.cameras, config: nvr.config });
 
       for (const cam of nvr.cameras) {
         if (this.map.has(cam.id)) {
@@ -64,6 +64,16 @@ class CameraRegistry {
   /** All cameras. */
   allCameras(): CameraConfig[] {
     return Array.from(this.map.values()).map(e => e.camera);
+  }
+
+  /** All NVR info for health checks. */
+  getNvrs(): { name: string; host: string; port: number; cameraCount: number }[] {
+    return this.providers.map(p => ({
+      name: p.name,
+      host: p.config.host,
+      port: p.config.port,
+      cameraCount: p.cameras.length,
+    }));
   }
 
   /** Generate go2rtc streams config from all NVRs. */
