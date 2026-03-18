@@ -116,9 +116,9 @@ async function handleConfigChange() {
   // Re-init registry with new config
   registry.init(newConfig.nvrs);
 
-  // Update DB rows with NVR groups
+  // Update DB rows with NVR groups + labels from discovery
   const cameraEntries = newConfig.nvrs.flatMap(nvr =>
-    nvr.cameras.map(cam => ({ id: cam.id, group: nvr.name }))
+    nvr.cameras.map(cam => ({ id: cam.id, group: nvr.name, label: cam.label }))
   );
   ensureCameraRows(cameraEntries);
 

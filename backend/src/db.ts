@@ -33,14 +33,17 @@ export function initDb() {
   // Codec cache is NOT cleared on restart anymore — probed data persists.
 }
 
-/** Ensure all camera IDs have a row in DB with group set. */
-export function ensureCameraRows(cameras: { id: string; group: string }[]) {
+/** Ensure all camera IDs have a row in DB with group set. Fill label from NVR only if empty. */
+export function ensureCameraRows(cameras: { id: string; group: string; label?: string }[]) {
   const upsertGroup = db.prepare(`
-    INSERT INTO cameras (id, "group", sort_order) VALUES (?, ?, ?)
-    ON CONFLICT(id) DO UPDATE SET "group"=excluded."group"
+    INSERT INTO cameras (id, "group", sort_order, label) VALUES (?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET
+      "group"=excluded."group",
+      label = CASE WHEN cameras.label = '' OR cameras.label IS NULL
+              THEN excluded.label ELSE cameras.label END
   `);
-  const txn = db.transaction((cams: { id: string; group: string }[]) => {
-    cams.forEach((cam, i) => upsertGroup.run(cam.id, cam.group, i));
+  const txn = db.transaction((cams: { id: string; group: string; label?: string }[]) => {
+    cams.forEach((cam, i) => upsertGroup.run(cam.id, cam.group, i, cam.label || ''));
   });
   txn(cameras);
 }

@@ -10,7 +10,7 @@
 
 import { CamPlayer } from './player.js';
 
-(window._oko = window._oko || {}).cameraView = 'v3c3';
+(window._oko = window._oko || {}).cameraView = 'v3c5';
 
 export class CameraView {
   /**
@@ -242,16 +242,24 @@ export class CameraView {
   _updateInfoTooltip(player, kbps) {
     if (!player) return;
     const p = player;
+    const full = this.el.classList.contains('fullscreen');
     const parts = [this.id];
-    if (p.mode) parts.push(p.mode.toUpperCase());
+
+    if (p.mode) parts.push(full ? p.mode.toUpperCase() : p.mode.toUpperCase().replace('WEBRTC', 'WR'));
     if (kbps > 0) parts.push(`${kbps} kbps`);
     const v = this.video;
-    if (v.videoWidth) parts.push(`${v.videoWidth}×${v.videoHeight}`);
-    if (this.codec) parts.push(this.codec === 'hevc' ? 'H.265' : 'H.264');
-    this._infoTooltip.textContent = parts.join(' · ');
+    if (v.videoWidth) {
+      parts.push(full ? `${v.videoWidth}×${v.videoHeight}` : `${v.videoWidth}p`);
+    }
+    if (this.codec) {
+      parts.push(full
+        ? (this.codec === 'hevc' ? 'H.265' : 'H.264')
+        : (this.codec === 'hevc' ? 'H265' : 'H264'));
+    }
+    this._infoTooltip.textContent = parts.join(full ? ' · ' : '·');
 
     // In fullscreen, always visible
-    if (this.el.classList.contains('fullscreen')) {
+    if (full) {
       this._infoTooltip.classList.add('visible');
     }
   }
@@ -543,8 +551,8 @@ export class CameraView {
     // Update badge with current archive time
     const pad = (n) => String(n).padStart(2, '0');
     const timeStr = `${pad(pos.getHours())}:${pad(pos.getMinutes())}:${pad(pos.getSeconds())}`;
-    const mode = this._playbackPlayer?.mode?.toUpperCase() || '';
-    this._modeBadge.textContent = `${mode} ● ${timeStr}`;
+    const dateStr = `${pad(pos.getDate())}.${pad(pos.getMonth() + 1)}`;
+    this._modeBadge.innerHTML = `<span class="rec-dot">● REC</span><span class="rec-time">${timeStr}</span><span class="rec-date">${dateStr}</span>`;
     this._modeBadge.className = 'cam-mode playback';
   }
 
@@ -612,12 +620,13 @@ export class CameraView {
   /** Update badge during playback with mode info. */
   _updatePlaybackBadge(mode) {
     const pos = this.playbackPosition;
+    const pad = (n) => String(n).padStart(2, '0');
     if (pos) {
-      const pad = (n) => String(n).padStart(2, '0');
       const timeStr = `${pad(pos.getHours())}:${pad(pos.getMinutes())}`;
-      this._modeBadge.textContent = `${mode.toUpperCase()} ● ${timeStr}`;
+      const dateStr = `${pad(pos.getDate())}.${pad(pos.getMonth() + 1)}`;
+      this._modeBadge.innerHTML = `<span class="rec-dot">● REC</span><span class="rec-time">${timeStr}</span><span class="rec-date">${dateStr}</span>`;
     } else {
-      this._modeBadge.textContent = `${mode.toUpperCase()} ● REC`;
+      this._modeBadge.innerHTML = `<span class="rec-dot">● REC</span>`;
     }
     this._modeBadge.className = 'cam-mode playback';
   }
@@ -714,6 +723,7 @@ export class CameraView {
       </div>
       <div class="cam-seek-timeline">
         <div class="seek-bar">
+          <div class="seek-ticks"><span></span><span></span><span></span><span></span><span></span><span></span></div>
           <div class="seek-fill"></div>
           <div class="seek-cursor"></div>
           <div class="seek-unavailable"></div>

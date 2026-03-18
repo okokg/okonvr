@@ -61,9 +61,9 @@ async function main() {
 
   registry.init(config.nvrs);
 
-  // Create DB rows with NVR name as group
+  // Create DB rows with NVR name as group + labels from discovery
   const cameraEntries = config.nvrs.flatMap(nvr =>
-    nvr.cameras.map(cam => ({ id: cam.id, group: nvr.name }))
+    nvr.cameras.map(cam => ({ id: cam.id, group: nvr.name, label: cam.label }))
   );
   ensureCameraRows(cameraEntries);
   generateGo2rtcConfig(config);

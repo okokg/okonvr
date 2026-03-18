@@ -17,7 +17,7 @@ import { CamPlayer } from './player.js';
 import { NotificationManager } from './notifications.js';
 import { SEARCH_DEBOUNCE_MS, VERSION } from './config.js';
 
-(window._oko = window._oko || {}).app = 'a5e6';
+(window._oko = window._oko || {}).app = 'a5e7';
 
 export class App {
   constructor() {
@@ -235,9 +235,10 @@ export class App {
         toRestart.push(cam);
       } else if (!isOffline && !cam.player.connected && cam.player.enabled
         && !cam.el.classList.contains('hidden')
-        && !cam.el.classList.contains('playback-mode')) {
+        && !cam.el.classList.contains('playback-mode')
+        && !cam.isHd) {
         // Stuck camera: enabled but not connected, NVR is online
-        // Skip cameras in playback mode — their SD player is intentionally stopped
+        // Skip cameras in playback/HD mode — their SD player is intentionally stopped
         toRestart.push(cam);
       }
     }
