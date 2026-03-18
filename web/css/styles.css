@@ -440,8 +440,8 @@ body {
   font-size: 8px;
   font-weight: 700;
   padding: 2px 5px;
-  color: rgba(255, 255, 255, 0.4);
-  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.65);
+  background: rgba(255, 255, 255, 0.06);
   transition: all 0.2s;
   user-select: none;
 }
@@ -454,6 +454,23 @@ body {
 .quality-hd.active {
   background: var(--warn);
   color: #fff;
+}
+
+/* Hover on inactive option: colored tint + border highlights */
+.quality-sd:not(.active):hover {
+  color: var(--accent);
+  background: rgba(29, 158, 117, 0.12);
+}
+.quality-sd:not(.active):hover ~ .quality-hd,
+.cam-quality-toggle:has(.quality-sd:not(.active):hover) {
+  border-color: rgba(29, 158, 117, 0.5);
+}
+.quality-hd:not(.active):hover {
+  color: var(--warn);
+  background: rgba(232, 168, 50, 0.12);
+}
+.cam-quality-toggle:has(.quality-hd:not(.active):hover) {
+  border-color: rgba(232, 168, 50, 0.5);
 }
 
 .quality-res {

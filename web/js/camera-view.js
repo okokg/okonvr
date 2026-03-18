@@ -10,7 +10,7 @@
 
 import { CamPlayer } from './player.js';
 
-(window._oko = window._oko || {}).cameraView = 'v3c5';
+(window._oko = window._oko || {}).cameraView = 'v3c6';
 
 export class CameraView {
   /**
@@ -243,7 +243,7 @@ export class CameraView {
     if (!player) return;
     const p = player;
     const full = this.el.classList.contains('fullscreen');
-    const parts = [this.id];
+    const parts = full ? [this.id] : [];
 
     if (p.mode) parts.push(full ? p.mode.toUpperCase() : p.mode.toUpperCase().replace('WEBRTC', 'WR'));
     if (kbps > 0) parts.push(`${kbps} kbps`);
