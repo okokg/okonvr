@@ -9,13 +9,13 @@ export function initStreamManager(apiUrl: string) {
   go2rtcApi = apiUrl;
 }
 
-/** Fetch all stream IDs from go2rtc (excluding playback_ streams). */
+/** Fetch all stream IDs from go2rtc. */
 export async function fetchStreams(): Promise<string[]> {
   try {
     const res = await fetch(`${go2rtcApi}/api/streams`);
     if (!res.ok) throw new Error(`go2rtc HTTP ${res.status}`);
     const data = await res.json() as Record<string, unknown>;
-    return Object.keys(data).filter(id => !id.startsWith('playback_'));
+    return Object.keys(data);
   } catch {
     return [];
   }
@@ -55,17 +55,42 @@ export function getActivePlaybacks() {
   }));
 }
 
-/** Cleanup ALL stale playback streams from go2rtc. */
-export async function cleanupAllPlaybacks(): Promise<void> {
+/** Cleanup stale playback streams from go2rtc. Called from frontend on page load. */
+export async function cleanupPlaybackStreams(): Promise<void> {
   try {
     const res = await fetch(`${go2rtcApi}/api/streams`);
     if (!res.ok) return;
     const data = await res.json() as Record<string, unknown>;
-    const playbackStreams = Object.keys(data).filter(id => id.startsWith('playback_'));
-    for (const name of playbackStreams) {
+    const stale = Object.keys(data).filter(id =>
+      id.startsWith('__pb_') || id.startsWith('playback_')
+    );
+    for (const name of stale) {
       await deleteStream(name);
     }
     activePlaybacks.clear();
+    if (stale.length > 0) {
+      console.log(`[cleanup] Removed ${stale.length} playback streams`);
+    }
+  } catch {}
+}
+
+/** Cleanup ALL internal streams from go2rtc. Called on backend startup only. */
+export async function cleanupAllInternal(): Promise<void> {
+  try {
+    const res = await fetch(`${go2rtcApi}/api/streams`);
+    if (!res.ok) return;
+    const data = await res.json() as Record<string, unknown>;
+    const stale = Object.keys(data).filter(id =>
+      id.startsWith('__') ||
+      id.startsWith('playback_') || id.startsWith('hd_') || id.startsWith('t_')
+    );
+    for (const name of stale) {
+      await deleteStream(name);
+    }
+    activePlaybacks.clear();
+    if (stale.length > 0) {
+      console.log(`[cleanup] Startup: removed ${stale.length} internal streams`);
+    }
   } catch {}
 }
 

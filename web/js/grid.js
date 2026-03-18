@@ -61,6 +61,9 @@ export class CameraGrid {
     /** @type {(cam: CameraView, seekTime: Date) => void} */
     this.onPlaybackSeek = null;
 
+    /** @type {(cam: CameraView) => void} */
+    this.onNeedTranscode = null;
+
     this._bindSwipe();
     this._startPeriodicTasks();
   }
@@ -97,6 +100,9 @@ export class CameraGrid {
       view.onHdToggle = (cam, wantHd) => {
         if (this.onHdToggle) this.onHdToggle(cam, wantHd);
       };
+      view.onNeedTranscode = (cam) => {
+        if (this.onNeedTranscode) this.onNeedTranscode(cam);
+      };
 
       this.cameras.push(view);
       this.gridEl.appendChild(view.el);
@@ -104,6 +110,10 @@ export class CameraGrid {
 
     // discover unique groups — show filter only when 2+ groups
     const groups = [...new Set(cameraConfigs.map(c => c.group).filter(Boolean))];
+
+    // Assign group colors
+    this._assignGroupColors(groups);
+
     if (groups.length > 1 && this.onGroupsDiscovered) {
       this.onGroupsDiscovered(groups);
     }
@@ -512,6 +522,49 @@ export class CameraGrid {
     }
 
     this.gridEl.style.setProperty('--auto-cols', String(bestCols));
+  }
+
+  // ── Private: group colors ──
+
+  /** Color palette for NVR groups — distinct, visible on dark background. */
+  static GROUP_COLORS = [
+    { base: 'rgba(0, 200, 83, 0.1)',   border: 'rgba(0, 200, 83, 0.4)',   bright: '#00c853', sep: 'rgba(0, 200, 83, 0.3)',   label: 'rgba(0, 200, 83, 0.6)' },
+    { base: 'rgba(41, 121, 255, 0.1)', border: 'rgba(41, 121, 255, 0.4)', bright: '#64b5f6', sep: 'rgba(41, 121, 255, 0.3)', label: 'rgba(41, 121, 255, 0.6)' },
+    { base: 'rgba(255, 171, 0, 0.1)',  border: 'rgba(255, 171, 0, 0.4)',  bright: '#ffab00', sep: 'rgba(255, 171, 0, 0.3)',  label: 'rgba(255, 171, 0, 0.6)' },
+    { base: 'rgba(213, 0, 249, 0.1)',  border: 'rgba(213, 0, 249, 0.4)',  bright: '#d500f9', sep: 'rgba(213, 0, 249, 0.3)',  label: 'rgba(213, 0, 249, 0.6)' },
+    { base: 'rgba(0, 191, 165, 0.1)',  border: 'rgba(0, 191, 165, 0.4)',  bright: '#00bfa5', sep: 'rgba(0, 191, 165, 0.3)',  label: 'rgba(0, 191, 165, 0.6)' },
+    { base: 'rgba(255, 61, 0, 0.1)',   border: 'rgba(255, 61, 0, 0.4)',   bright: '#ff3d00', sep: 'rgba(255, 61, 0, 0.3)',   label: 'rgba(255, 61, 0, 0.6)' },
+    { base: 'rgba(100, 181, 246, 0.1)',border: 'rgba(100, 181, 246, 0.4)',bright: '#64b5f6', sep: 'rgba(100, 181, 246, 0.3)',label: 'rgba(100, 181, 246, 0.6)' },
+    { base: 'rgba(255, 214, 0, 0.1)', border: 'rgba(255, 214, 0, 0.4)', bright: '#ffd600', sep: 'rgba(255, 214, 0, 0.3)', label: 'rgba(255, 214, 0, 0.6)' },
+  ];
+
+  /**
+   * Assign border colors to cameras based on their group.
+   * Only applies when there are 2+ groups.
+   */
+  _assignGroupColors(groups) {
+    if (groups.length < 2) return;
+
+    const colorMap = new Map();
+    groups.forEach((g, i) => {
+      colorMap.set(g, CameraGrid.GROUP_COLORS[i % CameraGrid.GROUP_COLORS.length]);
+    });
+
+    for (const cam of this.cameras) {
+      const color = colorMap.get(cam.group);
+      if (color) {
+        const nameWrap = cam.el.querySelector('.cam-name-wrap');
+        if (nameWrap) {
+          nameWrap.style.setProperty('--group-bg', color.base);
+          nameWrap.style.setProperty('--group-border', color.border);
+          nameWrap.style.setProperty('--group-text', color.bright);
+          nameWrap.style.setProperty('--group-sep', color.sep);
+          nameWrap.style.setProperty('--group-label', color.label);
+        }
+      }
+    }
+
+    this._groupColorMap = colorMap;
   }
 
   // ── Private: periodic tasks ──

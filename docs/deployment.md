@@ -178,12 +178,16 @@ Audio codec must be G.711Mu (PCMU) or G.711A (PCMA) for WebRTC. AAC works only v
 
 ### H.265 playback issues
 
-H.265 main streams require MSE (not WebRTC). The player switches automatically. If playback doesn't start, increase ffmpeg timeout:
+On Chrome 136+ with hardware decoder (GPU), H.265 streams play via WebRTC natively. Check the green **H.265** badge in header — if present, no issues expected.
+
+On Firefox or browsers without H.265 WebRTC, the player automatically falls back to MSE. If MSE playback doesn't start, increase ffmpeg timeout:
 
 ```yaml
 ffmpeg:
   timeout: 60
 ```
+
+Check `chrome://gpu` → "Video Acceleration Information" to verify HEVC decode is listed.
 
 ### Hot reload not working
 

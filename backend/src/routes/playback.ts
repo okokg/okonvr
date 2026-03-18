@@ -4,7 +4,7 @@ import { probeCodecs } from '../services/codec-prober';
 import { registry } from '../services/camera-registry';
 import {
   createStream, deleteStream, trackPlayback, untrackPlayback,
-  getActivePlaybacks, cleanupAllPlaybacks
+  getActivePlaybacks, cleanupPlaybackStreams
 } from '../services/stream-manager';
 
 function validateDatetime(dt: string): boolean {
@@ -33,7 +33,7 @@ export async function playbackRoutes(fastify: FastifyInstance) {
       return reply.code(400).send({ error: 'invalid resolution' });
     }
 
-    const streamName = `playback_${cameraId}_${Date.now()}`;
+    const streamName = `__pb_${cameraId}_${Date.now()}`;
     const codecs = probeCodecs(cameraId);
     const startDate = new Date(start);
     const endDate = new Date(end);
@@ -73,12 +73,12 @@ export async function playbackRoutes(fastify: FastifyInstance) {
   fastify.get('/playback', async () => getActivePlaybacks());
 
   fastify.delete('/playback', async () => {
-    await cleanupAllPlaybacks();
+    await cleanupPlaybackStreams();
     return { ok: true };
   });
 
   fastify.post('/playback/cleanup', async () => {
-    await cleanupAllPlaybacks();
+    await cleanupPlaybackStreams();
     return { ok: true };
   });
 }

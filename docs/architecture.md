@@ -77,14 +77,25 @@ Adding a new NVR vendor: create `providers/vendor.ts`, implement the interface, 
 
 ### Playback Strategy (codec-aware)
 
-| Video | Resolution | Strategy | Protocol |
-|-------|-----------|----------|----------|
-| H.264 | Original | Raw RTSP passthrough | WebRTC |
-| H.264 | 720p etc | ffmpeg resize | WebRTC |
-| H.265 | Original | Raw RTSP passthrough | MSE |
-| H.265 | 720p etc | ffmpeg transcode H.265→H.264 | WebRTC |
+| Video | Resolution | Browser H.265 | Strategy | Protocol |
+|-------|-----------|---------------|----------|----------|
+| H.264 | Original | — | Raw RTSP passthrough | WebRTC |
+| H.264 | 720p etc | — | ffmpeg resize | WebRTC |
+| H.265 | Original | ✓ (Chrome 136+) | Raw RTSP passthrough | WebRTC |
+| H.265 | Original | ✗ (Firefox etc) | Raw RTSP passthrough | MSE |
+| H.265 | 720p etc | — | ffmpeg transcode H.265→H.264 | WebRTC |
+
+H.265 WebRTC support is auto-detected via `RTCRtpReceiver.getCapabilities('video')`. Requires hardware decoder (GPU). Supported on Chrome 136+, Safari 18+. Not supported on Firefox.
 
 Audio: PCMU/PCMA → `#audio=copy`, AAC → MSE only, G.722/unknown → dropped.
+
+### Codec Negotiation (SDP)
+
+The player sets codec preferences in the SDP offer based on browser capabilities:
+- H.265 supported → order: `H.265, H.264` — go2rtc matches source codec automatically
+- H.265 not supported → order: `H.264` only — HEVC sources fall back to MSE
+
+This means both H.264 and H.265 sources work seamlessly through a single WebRTC connection on modern browsers. No per-camera configuration needed.
 
 ### Stream Lifecycle
 

@@ -236,21 +236,33 @@ body {
   pointer-events: none;
 }
 
-.cam-name-wrap { display: flex; align-items: center; gap: 6px; }
+.cam-name-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: var(--group-bg, rgba(0, 0, 0, 0.5));
+  border: 1px solid var(--group-border, rgba(255, 255, 255, 0.1));
+  padding: 2px 6px;
+  border-radius: 3px;
+}
 
 .cam-name {
   font-family: var(--mono);
   font-size: 11px;
   font-weight: 700;
-  color: #fff;
-  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8);
+  color: var(--group-text, #fff);
+}
+
+.cam-name-sep {
+  width: 1px;
+  height: 10px;
+  background: var(--group-sep, rgba(255, 255, 255, 0.2));
 }
 
 .cam-label {
   font-family: var(--sans);
-  font-size: 10px;
-  color: rgba(255, 255, 255, 0.6);
-  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8);
+  font-size: 9px;
+  color: var(--group-label, rgba(255, 255, 255, 0.5));
 }
 
 .cam-badges { display: flex; align-items: center; gap: 6px; }
@@ -418,12 +430,7 @@ body {
 /* ── Timeline Bar ── */
 
 .cam-timeline {
-  position: absolute;
-  bottom: 0;
-  left: 0;
-  right: 0;
-  height: 3px;
-  pointer-events: none;
+  display: none;
 }
 
 .cam-timeline canvas {
@@ -841,7 +848,7 @@ body {
 .light-theme .cam { border-color: var(--border); }
 .light-theme .cam-loading { color: #999; }
 .light-theme .cam-overlay { background: linear-gradient(transparent, rgba(255,255,255,0.7)); }
-.light-theme .cam-name { color: #111; text-shadow: none; }
+.light-theme .cam-name { color: #fff; text-shadow: none; }
 .light-theme .cam-label { color: #555; text-shadow: none; }
 .light-theme .cam-bitrate { color: rgba(0,0,0,0.5); text-shadow: none; }
 .light-theme .cam-info-tooltip { background: rgba(255,255,255,0.9); color: #333; border: 1px solid var(--border); }

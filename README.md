@@ -8,14 +8,30 @@ OKO NVR PLAYER connects to Hikvision and Dahua NVRs via RTSP, streams live video
 
 **Key features:**
 - WebRTC live streaming with sub-stream (SD) and main-stream (HD) switching
+- Native H.265/HEVC WebRTC support — no transcoding on Chrome 136+, Safari 18+
+- Automatic MSE fallback for browsers without H.265 WebRTC (Firefox)
 - NVR archive playback with 24h seek timeline and quick seek buttons
 - Auto-discovery of cameras from Hikvision ISAPI and Dahua CGI APIs
 - Multi-NVR support with per-NVR grouping and filtering
-- Codec detection (H.264/H.265) with automatic transcoding for WebRTC
 - Audio support (PCMU/PCMA native, AAC via MSE)
 - Hot reload — edit `oko.yaml`, cameras update without restart
-- Full keyboard navigation
+- Full keyboard navigation — no mouse required
 - Dark/light theme, compact mode, auto-fit grid
+- UI configuration via oko.yaml
+
+## H.265/HEVC Support
+
+OKO NVR PLAYER automatically detects browser H.265 WebRTC capability and streams HEVC directly without transcoding when supported. No server-side processing needed.
+
+| Browser | H.265 WebRTC | Fallback |
+|---------|-------------|----------|
+| Chrome 136+ | ✓ (hardware decode required) | — |
+| Safari 18+ | ✓ | — |
+| Firefox | ✗ | MSE (auto) |
+| Edge 136+ | ✓ (Chromium-based) | — |
+| Older Chrome | ✗ | MSE (auto) |
+
+When H.265 is supported, a green **H.265** badge appears in the header. Both sub-streams and main-streams can use H.265 — ~50% bandwidth savings compared to H.264 at the same quality.
 
 ## Quick Start
 
@@ -115,6 +131,13 @@ See [docs/keyboard-shortcuts.md](docs/keyboard-shortcuts.md) for full reference.
 | Hikvision | ✓ | ✓ | ISAPI (Digest auth) | PCMU/PCMA | DS-7732NI-K4 |
 | Dahua | ✓ | ✓ | CGI API (Digest auth) | PCMU/PCMA/AAC | DHI-NVR5216-EI |
 | Generic | ✓ | ✓ | Manual | Depends | — |
+
+## Tested Platforms
+
+| Device | Browser | H.265 WebRTC | Notes |
+|--------|---------|-------------|-------|
+| MacBook M4, macOS 15.6 | Chrome 145 | ✓ | H.264 + H.265 via WebRTC, no transcoding |
+| MacBook M4, macOS 15.6 | Firefox | ✗ | Auto fallback to MSE for H.265 streams |
 
 ## License
 

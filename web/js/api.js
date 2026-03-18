@@ -116,4 +116,15 @@ export class ApiClient {
     if (!res.ok) return null;
     return res.json();
   }
+
+  /** Create a transcoded H.264 stream for a camera (when client can't decode H.265). */
+  async createTranscodeStream(cameraId) {
+    const res = await fetch(`${BACKEND_URL}/transcode-stream`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ camera: cameraId }),
+    });
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+  }
 }

@@ -20,11 +20,11 @@ Optimal NVR settings for OKO NVR PLAYER.
 
 | Setting | Value | Notes |
 |---------|-------|-------|
-| Codec | **H.264** | Required — WebRTC doesn't support H.265 |
+| Codec | **H.265** or **H.264** | H.265 recommended for Chrome 136+ (~50% less bandwidth). Use H.264 if Firefox support needed. |
 | Resolution | 640×480 or 704×576 | Sufficient for grid, saves bandwidth |
 | Frame rate | 15 fps | Enough for monitoring |
 | Bitrate type | VBR | |
-| Bitrate | 256-512 kbps | |
+| Bitrate | 128-256 kbps (H.265) / 256-512 kbps (H.264) | H.265 needs half the bitrate |
 
 ### Audio Settings
 
@@ -78,11 +78,11 @@ channels: "1-32, !12"
 | Setting | Value | Notes |
 |---------|-------|-------|
 | Type | Доп. поток 1 | |
-| Codec | **H.264** | Required for WebRTC |
+| Codec | **H.265** or **H.264** | H.265 recommended for Chrome 136+ (~50% less bandwidth). Use H.264 if Firefox support needed. |
 | Resolution | 640×480 (VGA) or D1 | |
 | Frame rate | 15-20 fps | |
 | Bitrate type | VBR | |
-| Bitrate | 512 kbps | |
+| Bitrate | 256 kbps (H.265) / 512 kbps (H.264) | H.265 needs half the bitrate |
 
 ### Audio Settings
 
@@ -134,7 +134,7 @@ Generic provider does not support auto-discovery. Channels must be specified.
 
 ### Sub-stream shows black/green
 
-Camera sub-stream codec is H.265 — change to H.264 in NVR settings.
+If using Firefox or a browser without H.265 WebRTC support, the camera sub-stream codec may be H.265 which can't play via WebRTC. Either change sub-stream to H.264 in NVR settings, or use Chrome 136+ which supports H.265 natively.
 
 ### Audio not detected
 
@@ -159,4 +159,4 @@ Check NVR time zone matches. Hikvision uses UTC in RTSP URLs, Dahua uses local t
 
 ### HD mode shows nothing
 
-Main stream is H.265 — go2rtc uses MSE (not WebRTC). Check browser console for MSE errors. Chrome supports H.265 MSE, Firefox may not.
+Main stream is H.265 — on Chrome 136+ and Safari 18+, H.265 plays natively via WebRTC (requires hardware decoder / GPU). On older browsers or Firefox, falls back to MSE automatically. Check browser console for `[player] H.265 WebRTC: supported/not supported`.

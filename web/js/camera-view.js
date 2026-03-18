@@ -51,7 +51,7 @@ export class CameraView {
 
   // ── Public ──
 
-  /** Start streaming. */
+  /** Start streaming. Transcode is triggered reactively if codec mismatch detected. */
   start() { this.player.start(); }
 
   /** Stop streaming and mark disabled. */
@@ -154,6 +154,15 @@ export class CameraView {
   /** Toggle playback panel open/closed. */
   togglePlaybackPanel() {
     this.el.querySelector('.cam-playback-btn').click();
+  }
+
+  /** Switch live stream to a different go2rtc stream (e.g. transcoded). */
+  switchToStream(newStreamName) {
+    this.player.disable();
+    this._transcodeStream = newStreamName;
+    this.player = new CamPlayer(this.video, newStreamName);
+    this._bindPlayerEvents();
+    this.player.start();
   }
 
   /** Update bitrate display. Call periodically. */
@@ -265,6 +274,12 @@ export class CameraView {
    * @type {(camera: CameraView, seekTime: Date) => void}
    */
   onPlaybackSeek = null;
+
+  /**
+   * Called when camera needs H.265→H.264 transcode (client has no H.265).
+   * @type {(camera: CameraView) => void}
+   */
+  onNeedTranscode = null;
 
   /**
    * Called when user quick-seeks by offset.
@@ -590,7 +605,7 @@ export class CameraView {
       <div class="cam-overlay">
         <div class="cam-name-wrap">
           <span class="cam-name">${this.id}</span>
-          ${this.label ? `<span class="cam-label">${this.label}</span>` : ''}
+          ${this.label ? `<span class="cam-name-sep"></span><span class="cam-label">${this.label}</span>` : ''}
         </div>
         <div class="cam-badges">
           <div class="cam-audio-wrap" title="Toggle audio — click to unmute">
@@ -633,6 +648,10 @@ export class CameraView {
     this.player.onModeChange = (mode) => {
       this._modeBadge.textContent = `${mode.toUpperCase()} ●LIVE`;
       this._modeBadge.className = `cam-mode ${mode}`;
+    };
+
+    this.player.onNeedTranscode = () => {
+      if (this.onNeedTranscode) this.onNeedTranscode(this);
     };
   }
 

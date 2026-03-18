@@ -42,10 +42,12 @@ export class App {
 
     this.notifications.requestPermission();
 
-    // Detect H.265 WebRTC support early (cached for lifetime)
-    const h265 = CamPlayer.h265WebRTCSupported;
-    console.log(`[app] Browser H.265 WebRTC: ${h265 ? 'YES — HEVC streams via WebRTC' : 'NO — HEVC fallback to MSE'}`);
-    if (h265) {
+    // Detect H.265 support early (cached for lifetime)
+    const h265rtc = CamPlayer.h265WebRTCSupported;
+    const h265mse = CamPlayer.h265MSESupported;
+    const needsTranscode = CamPlayer.needsH265Transcode;
+    console.log(`[app] H.265: WebRTC=${h265rtc}, MSE=${h265mse}, needsTranscode=${needsTranscode}`);
+    if (h265rtc) {
       document.getElementById('h265-sep').style.display = '';
       document.getElementById('h265-badge').style.display = '';
     }
@@ -276,6 +278,17 @@ export class App {
     this.grid.onHdToggle = (cam, wantHd) => {
       this._toggleHd(cam, wantHd);
     };
+
+    this.grid.onNeedTranscode = async (cam) => {
+      try {
+        console.log(`[app] ${cam.id}: requesting H.265→H.264 transcode`);
+        const result = await this.api.createTranscodeStream(cam.id);
+        cam.switchToStream(result.stream);
+        this._showHint(`${cam.id} → transcoding H.264`);
+      } catch (err) {
+        console.error(`[app] Transcode failed for ${cam.id}:`, err);
+      }
+    };
   }
 
   // ── Controls ──
@@ -371,13 +384,34 @@ export class App {
       btn.textContent = group;
       btn.title = `Show only ${group} cameras (click again to show all)`;
 
+      // Apply group color as button border
+      const colorMap = this.grid._groupColorMap;
+      if (colorMap && colorMap.has(group)) {
+        const color = colorMap.get(group);
+        btn.style.border = `1px solid ${color.bright}`;
+        btn.style.color = color.bright;
+      }
+
       btn.addEventListener('click', () => {
         const isActive = btn.classList.contains('active');
-        document.querySelectorAll('.group-btn').forEach(b => b.classList.remove('active'));
+        // Reset all group buttons to outline style
+        document.querySelectorAll('.group-btn').forEach(b => {
+          b.classList.remove('active');
+          b.style.background = '';
+          const g = b.dataset.group;
+          if (colorMap && colorMap.has(g)) {
+            b.style.color = colorMap.get(g).bright;
+          }
+        });
 
         if (!isActive) {
           btn.classList.add('active');
           this.grid.groupFilter = group;
+          // Fill with group color when active
+          if (colorMap && colorMap.has(group)) {
+            btn.style.background = colorMap.get(group).bright;
+            btn.style.color = '#fff';
+          }
         } else {
           this.grid.groupFilter = '';
         }

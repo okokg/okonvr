@@ -25,21 +25,36 @@ export class CamPlayer {
     try {
       const caps = RTCRtpReceiver.getCapabilities('video');
       const codecs = caps?.codecs || [];
-      const mimeTypes = codecs.map(c => c.mimeType);
-      console.log('[player] Available video codecs:', mimeTypes.join(', '));
       const found = codecs.some(c =>
         c.mimeType === 'video/H265' || c.mimeType === 'video/H.265' ||
         c.mimeType === 'video/HEVC' || c.mimeType?.toLowerCase().includes('h265') ||
         c.mimeType?.toLowerCase().includes('hevc')
       );
-      console.log('[player] H265 codec found:', found);
       CamPlayer._h265cached = found;
     } catch (e) {
-      console.error('[player] H265 detection error:', e);
       CamPlayer._h265cached = false;
     }
     console.log(`[player] H.265 WebRTC: ${CamPlayer._h265cached ? 'supported' : 'not supported'}`);
     return CamPlayer._h265cached;
+  }
+
+  /** Check if browser can decode H.265 via MSE. */
+  static get h265MSESupported() {
+    if (CamPlayer._h265MSEcached !== undefined) return CamPlayer._h265MSEcached;
+    try {
+      CamPlayer._h265MSEcached =
+        typeof MediaSource !== 'undefined' &&
+        MediaSource.isTypeSupported('video/mp4; codecs="hvc1.1.6.L153.B0"');
+    } catch {
+      CamPlayer._h265MSEcached = false;
+    }
+    console.log(`[player] H.265 MSE: ${CamPlayer._h265MSEcached ? 'supported' : 'not supported'}`);
+    return CamPlayer._h265MSEcached;
+  }
+
+  /** No H.265 at all — needs server transcode. */
+  static get needsH265Transcode() {
+    return !CamPlayer.h265WebRTCSupported && !CamPlayer.h265MSESupported;
   }
 
   /** @param {HTMLVideoElement} video  @param {string} name - stream ID  @param {Object} [opts] */
@@ -58,10 +73,12 @@ export class CamPlayer {
     this.mode = null;       // 'webrtc' | 'mse' | null
     this.enabled = false;
     this.connected = false;
+    this._codecMismatch = false;  // true after codec mismatch 500 — use MSE only
 
     // retry
     this._retryTimer = null;
     this._iceTimeout = null;
+    this._videoDecodeCheck = null;
     this._webrtcRetried = false;
     this.retryDelay = RETRY_BASE_MS;
 
@@ -74,18 +91,24 @@ export class CamPlayer {
     this.onStatusChange = null;  // (online: boolean) => void
     this.onAudioTrack = null;    // () => void
     this.onModeChange = null;    // (mode: string) => void
+    this.onNeedTranscode = null; // (streamName: string) => void — called when H.265 can't be decoded
   }
 
   // ── Public API ──
 
   start() {
     this.enabled = true;
-    this._connectWebRTC();
+    if (this._codecMismatch) {
+      this._connectMSE();
+    } else {
+      this._connectWebRTC();
+    }
   }
 
   /** Start directly with MSE, skipping WebRTC. Use for HEVC playback. */
   startMSE() {
     this.enabled = true;
+    this._codecMismatch = true;
     this._connectMSE();
   }
 
@@ -98,6 +121,7 @@ export class CamPlayer {
   stop() {
     clearTimeout(this._retryTimer);
     clearTimeout(this._iceTimeout);
+    clearTimeout(this._videoDecodeCheck);
     this._closePeerConnection();
     this._closeWebSocket();
     this._resetVideo();
@@ -148,7 +172,27 @@ export class CamPlayer {
       );
 
       if (!response.ok) {
-        // retry once after a short delay before giving up on WebRTC
+        const errorText = await response.text().catch(() => '');
+        // Codec mismatch (e.g. H.265 source, no H.265 WebRTC)
+        if (errorText.includes('codecs not matched')) {
+          this._codecMismatch = true;
+          this._closePeerConnection();
+
+          if (CamPlayer.h265MSESupported) {
+            // Can decode via MSE
+            console.log(`[player] ${this.name}: codec mismatch, switching to MSE`);
+            this._connectMSE();
+          } else if (this.onNeedTranscode) {
+            // Can't decode H.265 at all — request server transcode
+            console.log(`[player] ${this.name}: no H.265 support, requesting transcode`);
+            this.onNeedTranscode(this.name);
+          } else {
+            console.log(`[player] ${this.name}: no H.265 support, no transcode handler`);
+            this._emitStatus(false);
+          }
+          return;
+        }
+        // Other errors → retry once before MSE fallback
         if (!this._webrtcRetried) {
           this._webrtcRetried = true;
           this._closePeerConnection();
@@ -195,6 +239,22 @@ export class CamPlayer {
         clearTimeout(this._iceTimeout);
         this._emitStatus(true);
         this.retryDelay = RETRY_BASE_MS;
+
+        // Check if video actually decodes (catches H.265 on browser without decoder)
+        this._videoDecodeCheck = setTimeout(() => {
+          if (this.mode === 'webrtc' && this.video.videoWidth === 0) {
+            console.log(`[player] ${this.name}: WebRTC connected but no video decode — codec unsupported`);
+            this._codecMismatch = true;
+            this._closePeerConnection();
+            if (CamPlayer.h265MSESupported) {
+              this._connectMSE();
+            } else if (this.onNeedTranscode) {
+              this.onNeedTranscode(this.name);
+            } else {
+              this._emitStatus(false);
+            }
+          }
+        }, 3000);
       }
     };
 
@@ -214,7 +274,6 @@ export class CamPlayer {
     const videoTransceiver = this.pc.addTransceiver('video', { direction: 'recvonly' });
     this.pc.addTransceiver('audio', { direction: 'recvonly' });
 
-    // Set codec preferences based on source codec
     if (videoTransceiver.setCodecPreferences) {
       const allCodecs = RTCRtpReceiver.getCapabilities('video').codecs;
       const h264 = allCodecs.filter(c => c.mimeType === 'video/H264');
@@ -222,14 +281,15 @@ export class CamPlayer {
         ? allCodecs.filter(c => c.mimeType === 'video/H265' || c.mimeType === 'video/HEVC')
         : [];
 
-      // Source is HEVC → H.265 first, else H.264 first
-      const preferred = this.preferH265 && h265.length
+      // If browser supports H.265, prefer it — go2rtc will match source codec
+      // H.265 source → go2rtc picks H.265 (first in list)
+      // H.264 source → go2rtc picks H.264 (also in list)
+      const preferred = h265.length
         ? [...h265, ...h264]
-        : [...h264, ...h265];
+        : [...h264];
 
       if (preferred.length > 0) {
         videoTransceiver.setCodecPreferences(preferred);
-        console.log(`[player] Codec order: ${this.preferH265 ? 'H.265 → H.264' : 'H.264 → H.265'}`);
       }
     }
   }
@@ -289,6 +349,18 @@ export class CamPlayer {
   }
 
   _initMediaSource(mimeType) {
+    // Check if browser supports this codec before trying
+    if (!MediaSource.isTypeSupported(mimeType)) {
+      console.log(`[player] ${this.name}: MSE codec not supported: ${mimeType}`);
+      this._closeWebSocket();
+      if (CamPlayer.needsH265Transcode && this.onNeedTranscode) {
+        this.onNeedTranscode(this.name);
+      } else {
+        this._emitStatus(false);
+      }
+      return;
+    }
+
     this.mediaSource = new MediaSource();
     this.video.src = URL.createObjectURL(this.mediaSource);
     this.bufferQueue = [];
@@ -313,7 +385,13 @@ export class CamPlayer {
 
         this._flushBufferQueue();
       } catch (err) {
-        // codec not supported
+        console.log(`[player] ${this.name}: addSourceBuffer failed: ${err.message}`);
+        this._closeWebSocket();
+        if (this.onNeedTranscode) {
+          this.onNeedTranscode(this.name);
+        } else {
+          this._emitStatus(false);
+        }
       }
     }, { once: true });
 
@@ -397,7 +475,8 @@ export class CamPlayer {
     if (!this.enabled) return;
     clearTimeout(this._retryTimer);
 
-    const reconnect = this.mode === 'mse'
+    // Always MSE if codec mismatch was detected
+    const reconnect = (this.mode === 'mse' || this._codecMismatch)
       ? () => this._connectMSE()
       : () => this._connectWebRTC();
 

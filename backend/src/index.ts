@@ -3,7 +3,7 @@ import { loadConfig } from './config';
 import { initDb, ensureCameraRows } from './db';
 import { createProvider } from './providers';
 import { registry } from './services/camera-registry';
-import { initStreamManager, cleanupAllPlaybacks } from './services/stream-manager';
+import { initStreamManager, cleanupAllInternal } from './services/stream-manager';
 import { generateGo2rtcConfig } from './services/go2rtc-config';
 import { startConfigWatcher } from './services/config-watcher';
 import { probeCodecs } from './services/codec-prober';
@@ -11,6 +11,7 @@ import { setUiConfig } from './services/config-store';
 import { cameraRoutes } from './routes/cameras';
 import { playbackRoutes } from './routes/playback';
 import { hdStreamRoutes } from './routes/hd-stream';
+import { transcodeRoutes } from './routes/transcode';
 import { healthRoutes } from './routes/health';
 
 async function main() {
@@ -70,6 +71,7 @@ async function main() {
   await fastify.register(cameraRoutes);
   await fastify.register(playbackRoutes);
   await fastify.register(hdStreamRoutes);
+  await fastify.register(transcodeRoutes);
   await fastify.register(healthRoutes);
 
   await fastify.listen({ port: config.server.port, host: '0.0.0.0' });
@@ -78,7 +80,7 @@ async function main() {
   // Watch oko.yaml for live changes
   startConfigWatcher(config);
 
-  setTimeout(() => cleanupAllPlaybacks(), 3000);
+  setTimeout(() => cleanupAllInternal(), 3000);
 
   // Background: probe codecs for all cameras (detects audio)
   setTimeout(() => probeAllCodecs(), 10000);

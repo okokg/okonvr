@@ -1,27 +1,16 @@
 import { FastifyInstance } from 'fastify';
 import { db, stmts } from '../db';
-import { fetchStreams } from '../services/stream-manager';
+import { registry } from '../services/camera-registry';
 
 export async function cameraRoutes(fastify: FastifyInstance) {
-  // GET /cameras — list all cameras (go2rtc streams + DB metadata)
+  // GET /cameras — list all cameras from registry + DB metadata
   fastify.get('/cameras', async () => {
-    const allStreams = await fetchStreams();
-    // Filter out temporary streams (hd_, playback_)
-    const streamIds = allStreams.filter(id => !id.startsWith('hd_') && !id.startsWith('playback_'));
-    const dbRows = stmts.getAll.all() as any[];
+    // Registry is the single source of truth for camera IDs
+    const cameraIds = registry.allIds();
 
-    // Ensure all streams have a DB row
-    const dbIds = new Set(dbRows.map((r: any) => r.id));
-    const insertMany = db.transaction((ids: string[]) => {
-      ids.forEach((id, i) => stmts.insertIgnore.run(id, i));
-    });
-    const newIds = streamIds.filter(id => !dbIds.has(id));
-    if (newIds.length > 0) insertMany(newIds);
-
-    // Merge and sort
     const allRows = stmts.getAll.all() as any[];
     const dbMap = new Map(allRows.map((r: any) => [r.id, r]));
-    const cameras = streamIds.map((id, i) => {
+    const cameras = cameraIds.map((id, i) => {
       const meta = dbMap.get(id);
       const audio = meta?.main_audio || '';
       const codec = meta?.main_codec || '';
