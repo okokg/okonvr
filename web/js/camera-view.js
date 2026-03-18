@@ -109,7 +109,7 @@ export class CameraView {
     this._hdStream = streamName;
     this.player.stop();
 
-    this._hdPlayer = new CamPlayer(this.video, streamName);
+    this._hdPlayer = new CamPlayer(this.video, streamName, { preferH265: forceMSE });
     this._hdPlayer.onStatusChange = (online) => {
       this._statusDot.classList.toggle('live', online);
       this._loading.style.display = online ? 'none' : 'block';
@@ -119,7 +119,7 @@ export class CameraView {
       this._modeBadge.className = `cam-mode ${mode}`;
     };
 
-    if (forceMSE) {
+    if (forceMSE && !CamPlayer.h265WebRTCSupported) {
       this._hdPlayer.startMSE();
     } else {
       this._hdPlayer.start();
@@ -315,7 +315,7 @@ export class CameraView {
       this._hdPlayer = null;
       this._hdStream = null;
     }
-    this._playbackPlayer = new CamPlayer(this.video, streamName);
+    this._playbackPlayer = new CamPlayer(this.video, streamName, { preferH265: forceMSE });
     this._playbackPlayer.onStatusChange = (online) => {
       this._statusDot.classList.toggle('live', online);
       this._loading.style.display = online ? 'none' : 'block';
@@ -326,8 +326,8 @@ export class CameraView {
       this._updatePlaybackBadge(mode);
     };
 
-    // HEVC original → force MSE (Chrome supports HEVC via MSE, not WebRTC)
-    if (forceMSE) {
+    // HEVC → use MSE only if browser doesn't support H.265 WebRTC
+    if (forceMSE && !CamPlayer.h265WebRTCSupported) {
       this._playbackPlayer.startMSE();
     } else {
       this._playbackPlayer.start();

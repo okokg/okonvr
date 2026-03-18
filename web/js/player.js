@@ -15,10 +15,38 @@ import {
 } from './config.js';
 
 export class CamPlayer {
-  /** @param {HTMLVideoElement} video  @param {string} name - stream ID */
-  constructor(video, name) {
+  /**
+   * Check if browser supports H.265/HEVC in WebRTC.
+   * Cached after first call.
+   * @returns {boolean}
+   */
+  static get h265WebRTCSupported() {
+    if (CamPlayer._h265cached !== undefined) return CamPlayer._h265cached;
+    try {
+      const caps = RTCRtpReceiver.getCapabilities('video');
+      const codecs = caps?.codecs || [];
+      const mimeTypes = codecs.map(c => c.mimeType);
+      console.log('[player] Available video codecs:', mimeTypes.join(', '));
+      const found = codecs.some(c =>
+        c.mimeType === 'video/H265' || c.mimeType === 'video/H.265' ||
+        c.mimeType === 'video/HEVC' || c.mimeType?.toLowerCase().includes('h265') ||
+        c.mimeType?.toLowerCase().includes('hevc')
+      );
+      console.log('[player] H265 codec found:', found);
+      CamPlayer._h265cached = found;
+    } catch (e) {
+      console.error('[player] H265 detection error:', e);
+      CamPlayer._h265cached = false;
+    }
+    console.log(`[player] H.265 WebRTC: ${CamPlayer._h265cached ? 'supported' : 'not supported'}`);
+    return CamPlayer._h265cached;
+  }
+
+  /** @param {HTMLVideoElement} video  @param {string} name - stream ID  @param {Object} [opts] */
+  constructor(video, name, opts = {}) {
     this.video = video;
     this.name = name;
+    this.preferH265 = opts.preferH265 || false;
 
     // connection state
     this.pc = null;
@@ -186,12 +214,22 @@ export class CamPlayer {
     const videoTransceiver = this.pc.addTransceiver('video', { direction: 'recvonly' });
     this.pc.addTransceiver('audio', { direction: 'recvonly' });
 
-    // force H264 in SDP offer (fixes Firefox which defaults to VP8)
+    // Set codec preferences based on source codec
     if (videoTransceiver.setCodecPreferences) {
       const allCodecs = RTCRtpReceiver.getCapabilities('video').codecs;
-      const h264Codecs = allCodecs.filter(c => c.mimeType === 'video/H264');
-      if (h264Codecs.length > 0) {
-        videoTransceiver.setCodecPreferences(h264Codecs);
+      const h264 = allCodecs.filter(c => c.mimeType === 'video/H264');
+      const h265 = CamPlayer.h265WebRTCSupported
+        ? allCodecs.filter(c => c.mimeType === 'video/H265' || c.mimeType === 'video/HEVC')
+        : [];
+
+      // Source is HEVC → H.265 first, else H.264 first
+      const preferred = this.preferH265 && h265.length
+        ? [...h265, ...h264]
+        : [...h264, ...h265];
+
+      if (preferred.length > 0) {
+        videoTransceiver.setCodecPreferences(preferred);
+        console.log(`[player] Codec order: ${this.preferH265 ? 'H.265 → H.264' : 'H.264 → H.265'}`);
       }
     }
   }

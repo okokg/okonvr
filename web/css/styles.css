@@ -75,6 +75,7 @@ body {
 .stats .offline { color: var(--danger); font-weight: 700; }
 .stats .sep { margin: 0 4px; }
 .stats .bandwidth { color: var(--text-dim); font-weight: 400; }
+.stats .h265-badge { color: var(--accent); font-weight: 700; font-size: 10px; }
 
 .clock { font-family: var(--mono); font-size: 11px; color: var(--text-dim); }
 

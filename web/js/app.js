@@ -13,6 +13,7 @@
 import { ApiClient } from './api.js';
 import { CameraGrid } from './grid.js';
 import { CameraView } from './camera-view.js';
+import { CamPlayer } from './player.js';
 import { NotificationManager } from './notifications.js';
 import { SEARCH_DEBOUNCE_MS } from './config.js';
 
@@ -40,6 +41,14 @@ export class App {
     this._applyUiConfig();
 
     this.notifications.requestPermission();
+
+    // Detect H.265 WebRTC support early (cached for lifetime)
+    const h265 = CamPlayer.h265WebRTCSupported;
+    console.log(`[app] Browser H.265 WebRTC: ${h265 ? 'YES — HEVC streams via WebRTC' : 'NO — HEVC fallback to MSE'}`);
+    if (h265) {
+      document.getElementById('h265-sep').style.display = '';
+      document.getElementById('h265-badge').style.display = '';
+    }
     this._bindGridCallbacks();
     this._bindControls();
     this._bindKeyboard();
