@@ -16,7 +16,7 @@ import {
   TIMELINE_RENDER_INTERVAL_MS, SWIPE_THRESHOLD_PX,
 } from './config.js';
 
-(window._oko = window._oko || {}).grid = 'g2d0';
+(window._oko = window._oko || {}).grid = 'g2d2';
 
 export class CameraGrid {
   /**
@@ -107,6 +107,15 @@ export class CameraGrid {
       };
       view.onConnectionError = (cam) => {
         if (this.onConnectionError) this.onConnectionError(cam);
+      };
+      view.onTimeLock = (cam, locked, start, end, resolution) => {
+        if (this.onTimeLock) this.onTimeLock(cam, locked, start, end, resolution);
+      };
+      view.onPlaybackPause = (cam) => {
+        if (this.onPlaybackPause) this.onPlaybackPause(cam);
+      };
+      view.onPlaybackResume = (cam, pos) => {
+        if (this.onPlaybackResume) this.onPlaybackResume(cam, pos);
       };
 
       this.cameras.push(view);

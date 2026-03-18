@@ -17,7 +17,7 @@ import { CamPlayer } from './player.js';
 import { NotificationManager } from './notifications.js';
 import { SEARCH_DEBOUNCE_MS, VERSION } from './config.js';
 
-(window._oko = window._oko || {}).app = 'a5e7';
+(window._oko = window._oko || {}).app = 'a5f3';
 
 export class App {
   constructor() {
@@ -486,9 +486,72 @@ export class App {
 
       this.grid._updateStats();
     };
-  }
 
-  // ── Controls ──
+    // Time lock: store locked time globally, auto-playback on camera open
+    this._lockedTime = null; // { start, end, resolution }
+    this._lockedCameras = []; // cameras with playback started in lock mode
+
+    this.grid.onTimeLock = (cam, locked, start, end, resolution) => {
+      if (locked && start) {
+        this._lockedTime = { start, end, resolution };
+        this._lockedCameras = [];
+        // Current camera is already playing — track it
+        if (cam.isPlayback) this._lockedCameras.push(cam);
+        console.log(`[app] Time locked: ${start} → ${end} (${resolution})`);
+        this._showTimeLockBadge();
+      } else {
+        this._clearTimeLock();
+      }
+    };
+
+    this.grid.onFullscreenEnter = (cam) => {
+      // Sync lock button state on new camera
+      if (this._lockedTime) {
+        const lockBtn = cam.el.querySelector('.playback-lock');
+        if (lockBtn) lockBtn.classList.add('active');
+
+        if (!cam.isPlayback) {
+          // Auto-start playback with locked time
+          const { start, end, resolution } = this._lockedTime;
+          console.log(`[app] ${cam.id}: auto-playback from locked time ${start}`);
+          this._lockedCameras.push(cam);
+          setTimeout(() => {
+            const startInput = cam.el.querySelector('.playback-start');
+            const endInput = cam.el.querySelector('.playback-end');
+            const resSelect = cam.el.querySelector('.playback-resolution');
+            if (startInput) startInput.value = start;
+            if (endInput) endInput.value = end;
+            if (resSelect) resSelect.value = resolution;
+            if (cam.onPlaybackRequest) {
+              cam.onPlaybackRequest(cam, start, end, resolution);
+            }
+          }, 200);
+        }
+      } else {
+        const lockBtn = cam.el.querySelector('.playback-lock');
+        if (lockBtn) lockBtn.classList.remove('active');
+      }
+    };
+
+    // Archive pause: destroy stream, keep freeze frame
+    this.grid.onPlaybackPause = async (cam) => {
+      if (!cam.isPlayback) return;
+      const streamName = cam.playbackStreamName;
+      console.log(`[app] ${cam.id}: archive paused at ${cam._pausedPosition?.toLocaleTimeString()}, destroying ${streamName}`);
+      if (cam._playbackPlayer) {
+        cam._playbackPlayer.disable();
+        cam._playbackPlayer = null;
+      }
+      cam._playbackStream = null; // clear so isPlayback=false, prevents double-delete on resume
+      await this.api.deletePlayback(streamName).catch(() => {});
+    };
+
+    // Archive resume: seek to saved position
+    this.grid.onPlaybackResume = (cam, position) => {
+      console.log(`[app] ${cam.id}: archive resume from ${position.toLocaleTimeString()}`);
+      this._seekPlayback(cam, position);
+    };
+  }
 
   _bindControls() {
     // grid size buttons
@@ -762,7 +825,12 @@ export class App {
       if (this.grid.fullscreenCamera) {
         if (e.key === 'ArrowRight') { e.preventDefault(); this.grid.navigateFullscreen(1); return; }
         if (e.key === 'ArrowLeft') { e.preventDefault(); this.grid.navigateFullscreen(-1); return; }
-        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); this.grid.exitFullscreen(); return; }
+        if (e.key === 'Enter') { e.preventDefault(); this.grid.exitFullscreen(); return; }
+        if (e.key === ' ') {
+          e.preventDefault();
+          this.grid.fullscreenCamera.togglePause();
+          return;
+        }
         if ((e.key === 'h' || e.key === 'H') && !e.ctrlKey && !e.metaKey) {
           const cam = this.grid.fullscreenCamera;
           if (!cam.isPlayback) this._toggleHd(cam, !cam.isHd);
@@ -856,7 +924,7 @@ export class App {
       endOfDay.setHours(23, 59, 59, 0);
 
       const pad = (n) => String(n).padStart(2, '0');
-      const fmtLocal = (d) => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+      const fmtLocal = (d) => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 
       const result = await this.api.createPlayback(cam.id, fmtLocal(seekTime), fmtLocal(endOfDay), resolution);
       cam.startPlayback(result.stream, seekTime, endOfDay, result.forceMSE, resolution);
@@ -878,6 +946,52 @@ export class App {
       this.grid.updatePlaybackHash();
       this._showHint(`${cam.id} → Live`);
     }
+  }
+
+  // ── Time Lock ──
+
+  _showTimeLockBadge() {
+    // Remove existing badge
+    document.querySelector('.time-lock-badge')?.remove();
+
+    if (!this._lockedTime) return;
+    const t = this._lockedTime.start;
+    // Extract time portion (HH:MM) from datetime-local string
+    const timeStr = t.includes('T') ? t.split('T')[1].substring(0, 5) : t.substring(11, 16);
+    const dateStr = t.includes('T') ? t.split('T')[0].substring(5).replace('-', '.') : t.substring(5, 10).replace('-', '.');
+
+    const badge = document.createElement('div');
+    badge.className = 'time-lock-badge';
+    badge.innerHTML = `<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg><span>${dateStr} ${timeStr}</span><span class="time-lock-close">✕</span>`;
+    badge.querySelector('.time-lock-close').addEventListener('click', (e) => {
+      e.stopPropagation();
+      this._clearTimeLock();
+    });
+
+    // Insert after stats in header
+    const controls = document.getElementById('controls');
+    const searchWrap = controls.querySelector('.search-wrap');
+    if (searchWrap) {
+      controls.insertBefore(badge, searchWrap);
+    } else {
+      controls.appendChild(badge);
+    }
+  }
+
+  _clearTimeLock() {
+    // Stop playback on all cameras started in lock mode
+    if (this._lockedCameras && this._lockedCameras.length > 0) {
+      console.log(`[app] Time lock: stopping ${this._lockedCameras.length} playback streams`);
+      for (const cam of this._lockedCameras) {
+        this._stopPlayback(cam);
+      }
+    }
+    this._lockedCameras = [];
+    this._lockedTime = null;
+    document.querySelector('.time-lock-badge')?.remove();
+    // Clear active state on all lock buttons
+    this.grid.cameras.forEach(c => c.clearTimeLock());
+    console.log('[app] Time lock cleared');
   }
 
   /** Cleanup all playback streams on page unload. */

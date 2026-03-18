@@ -10,7 +10,7 @@
 
 import { CamPlayer } from './player.js';
 
-(window._oko = window._oko || {}).cameraView = 'v3c6';
+(window._oko = window._oko || {}).cameraView = 'v4a2';
 
 export class CameraView {
   /**
@@ -84,6 +84,81 @@ export class CameraView {
     this.el.classList.toggle('hidden', !visible);
   }
 
+  /** Clear time lock button state. */
+  clearTimeLock() {
+    const btn = this.el.querySelector('.playback-lock');
+    if (btn) btn.classList.remove('active');
+  }
+
+  /** Toggle video pause. Live = freeze frame. Archive = real pause (stream destroyed). */
+  togglePause() {
+    const v = this.video;
+    if (!v) return;
+    const isPaused = this.el.classList.contains('paused');
+
+    if (isPaused) {
+      // Resume
+      this.el.classList.remove('paused');
+      this._showPauseIndicator('play');
+      if (this._pausedPosition && this.onPlaybackResume) {
+        // Archive: resume 1s before pause point (compensate for startup lag)
+        const resumeTime = new Date(this._pausedPosition.getTime() - 1000);
+        this.onPlaybackResume(this, resumeTime);
+        this._pausedPosition = null;
+      } else {
+        v.play();
+      }
+    } else {
+      // Pause
+      this.el.classList.add('paused');
+      this._showPauseIndicator('pause');
+      if (this.isPlayback) {
+        // Archive: capture frame, save position, destroy stream
+        this._pausedPosition = this.playbackPosition;
+        this._captureFrame(); // save current frame as poster
+        this.stopPlaybackTimer();
+        v.pause();
+        if (this.onPlaybackPause) this.onPlaybackPause(this);
+      } else {
+        // Live: simple freeze
+        v.pause();
+      }
+    }
+  }
+
+  /** Capture current video frame to poster so it persists after stream destroy. */
+  _captureFrame() {
+    const v = this.video;
+    if (!v || !v.videoWidth) return;
+    try {
+      const c = document.createElement('canvas');
+      c.width = v.videoWidth;
+      c.height = v.videoHeight;
+      c.getContext('2d').drawImage(v, 0, 0);
+      v.poster = c.toDataURL('image/jpeg', 0.85);
+    } catch (e) {
+      // CORS / tainted canvas — ignore
+    }
+  }
+
+  /** @type {Date|null} Position saved when archive was paused. */
+  _pausedPosition = null;
+
+  _showPauseIndicator(state) {
+    const ind = this.el.querySelector('.cam-pause-indicator');
+    if (!ind) return;
+    // Update icon
+    ind.innerHTML = state === 'pause'
+      ? '<svg viewBox="0 0 24 24" width="32" height="32" fill="white"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>'
+      : '<svg viewBox="0 0 24 24" width="32" height="32" fill="white"><path d="M8 5v14l11-7z"/></svg>';
+    ind.classList.add('visible');
+    clearTimeout(this._pauseIndicatorTimer);
+    if (state === 'play') {
+      this._pauseIndicatorTimer = setTimeout(() => ind.classList.remove('visible'), 800);
+    }
+    // else pause: keep visible until resume
+  }
+
   /** Enter in-page fullscreen mode. */
   enterFullscreen() {
     this.el.classList.add('fullscreen');
@@ -100,6 +175,19 @@ export class CameraView {
   /** Exit in-page fullscreen mode. */
   exitFullscreen() {
     this.el.classList.remove('fullscreen');
+    // Resume if paused
+    if (this.el.classList.contains('paused')) {
+      this.el.classList.remove('paused');
+      const ind = this.el.querySelector('.cam-pause-indicator');
+      if (ind) ind.classList.remove('visible');
+      if (this._pausedPosition && this.onPlaybackResume) {
+        // Archive was paused: resume stream
+        this.onPlaybackResume(this, this._pausedPosition);
+        this._pausedPosition = null;
+      } else {
+        this.video.play();
+      }
+    }
     this.video.muted = true;
     this._audioIcon.classList.remove('unmuted');
     this._infoTooltip.classList.remove('visible');
@@ -203,6 +291,7 @@ export class CameraView {
   _hideLoading() {
     this._loading.style.display = 'none';
     this._stopRenderCheck();
+    this.video.poster = ''; // clear captured pause frame now that real frames are rendering
   }
 
   /** Poll until video actually has frames, then hide loading. */
@@ -210,7 +299,17 @@ export class CameraView {
     this._stopRenderCheck();
     this._renderCheckTimer = setInterval(() => {
       if (this.video.videoWidth > 0 && this.video.videoHeight > 0) {
-        this._hideLoading();
+        if (this.video.poster) {
+          // Resuming from pause: hide spinner, buffer 2s behind poster, then reveal
+          clearInterval(this._renderCheckTimer);
+          this._renderCheckTimer = null;
+          this._loading.style.display = 'none'; // hide spinner, poster stays
+          this._renderBufferTimer = setTimeout(() => {
+            this.video.poster = ''; // reveal live stream
+          }, 2000);
+        } else {
+          this._hideLoading();
+        }
       }
     }, 500);
   }
@@ -219,6 +318,10 @@ export class CameraView {
     if (this._renderCheckTimer) {
       clearInterval(this._renderCheckTimer);
       this._renderCheckTimer = null;
+    }
+    if (this._renderBufferTimer) {
+      clearTimeout(this._renderBufferTimer);
+      this._renderBufferTimer = null;
     }
   }
 
@@ -373,6 +476,24 @@ export class CameraView {
    */
   onConnectionError = null;
 
+  /**
+   * Called when user toggles time lock.
+   * @type {(camera: CameraView, locked: boolean, startTime: string, endTime: string, resolution: string) => void}
+   */
+  onTimeLock = null;
+
+  /**
+   * Called when archive playback is paused (stream should be destroyed).
+   * @type {(camera: CameraView) => void}
+   */
+  onPlaybackPause = null;
+
+  /**
+   * Called when archive playback should resume from saved position.
+   * @type {(camera: CameraView, position: Date) => void}
+   */
+  onPlaybackResume = null;
+
   // ── Playback ──
 
   _playbackStream = null;
@@ -393,6 +514,7 @@ export class CameraView {
   startPlayback(streamName, startTime, endTime, forceMSE = false, resolution = 'original') {
     this.stopPlaybackTimer();
     this._clearPendingChange();
+    // NOTE: video.poster preserved here — cleared in _hideLoading when frames arrive
 
     // CRITICAL: stop previous playback player to prevent retry loops
     if (this._playbackPlayer) {
@@ -479,6 +601,11 @@ export class CameraView {
   stopPlayback() {
     this.stopPlaybackTimer();
     clearInterval(this._nowMarkerTimer);
+    this.video.poster = '';
+    this._pausedPosition = null;
+    this.el.classList.remove('paused');
+    const ind = this.el.querySelector('.cam-pause-indicator');
+    if (ind) ind.classList.remove('visible');
     if (this._playbackPlayer) {
       this._playbackPlayer.disable();
       this._playbackPlayer = null;
@@ -669,6 +796,9 @@ export class CameraView {
         <span class="cam-loading-text">connecting</span>
       </div>
       <video muted autoplay playsinline></video>
+      <div class="cam-pause-indicator">
+        <svg viewBox="0 0 24 24" width="32" height="32" fill="white"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
+      </div>
       <div class="cam-bitrate"></div>
       <div class="cam-top-right">
         <div class="cam-quality-toggle" title="Toggle SD/HD stream (H)">
@@ -682,6 +812,12 @@ export class CameraView {
       <div class="cam-playback-panel">
         <div class="playback-row">
           <input type="datetime-local" class="playback-start" title="Playback start time">
+          <button class="playback-lock" title="Lock time — apply to all cameras on click">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5">
+              <rect x="5" y="11" width="14" height="10" rx="2"/>
+              <path d="M8 11V7a4 4 0 0 1 8 0v4"/>
+            </svg>
+          </button>
           <span class="playback-sep">&rarr;</span>
           <input type="datetime-local" class="playback-end" title="Playback end time">
         </div>
@@ -781,11 +917,15 @@ export class CameraView {
       if (this.onClick) this.onClick(this);
     });
 
-    // double-click → native fullscreen
+    // double-click → native fullscreen (grid), pause (in-page fullscreen)
     this.el.addEventListener('dblclick', (e) => {
       e.preventDefault();
       if (e.target.closest('.cam-playback-panel')) return;
-      if (this.onDoubleClick) this.onDoubleClick(this);
+      if (this.el.classList.contains('fullscreen')) {
+        this.togglePause();
+      } else if (this.onDoubleClick) {
+        this.onDoubleClick(this);
+      }
     });
 
     // Audio icon — toggle mute (only if camera has audio)
@@ -885,6 +1025,17 @@ export class CameraView {
           this.onQuickSeek(this, seekTime);
         }
       });
+    });
+
+    // Time lock button
+    this.el.querySelector('.playback-lock').addEventListener('click', (e) => {
+      e.stopPropagation();
+      const lockBtn = this.el.querySelector('.playback-lock');
+      const isLocked = lockBtn.classList.toggle('active');
+      const start = this.el.querySelector('.playback-start').value;
+      const end = this.el.querySelector('.playback-end').value;
+      const resolution = this.el.querySelector('.playback-resolution').value;
+      if (this.onTimeLock) this.onTimeLock(this, isLocked, start, end, resolution);
     });
 
     // Info tooltip on hover (grid mode)

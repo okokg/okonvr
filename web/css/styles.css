@@ -269,9 +269,9 @@ body {
 }
 
 /* Fullscreen: show label, full brightness */
-.cam.fullscreen .cam-name-wrap { opacity: 1; }
+.cam.fullscreen .cam-name-wrap { opacity: 1; background: rgba(0, 0, 0, 0.7); }
 .cam.fullscreen .cam-name-sep { display: block; }
-.cam.fullscreen .cam-label { display: inline; }
+.cam.fullscreen .cam-label { display: inline; font-size: 10px; filter: brightness(1.4); }
 
 .cam-badges { display: flex; align-items: center; gap: 6px; }
 
@@ -564,6 +564,49 @@ body {
   font-size: 12px;
 }
 
+/* Time lock button */
+.playback-lock {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 3px;
+  padding: 4px 6px;
+  cursor: pointer;
+  color: rgba(255, 255, 255, 0.35);
+  display: flex;
+  align-items: center;
+  transition: all 0.2s;
+}
+.playback-lock:hover { border-color: rgba(232, 168, 50, 0.5); color: rgba(232, 168, 50, 0.7); }
+.playback-lock.active {
+  background: rgba(232, 168, 50, 0.2);
+  border-color: rgba(232, 168, 50, 0.6);
+  color: var(--warn);
+}
+
+/* Time lock header badge */
+.time-lock-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: rgba(232, 168, 50, 0.12);
+  border: 1px solid rgba(232, 168, 50, 0.45);
+  border-radius: 4px;
+  padding: 3px 8px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--warn);
+  font-weight: 700;
+  margin-left: 8px;
+}
+.time-lock-badge svg { flex-shrink: 0; }
+.time-lock-close {
+  cursor: pointer;
+  opacity: 0.4;
+  font-size: 12px;
+  margin-left: 2px;
+}
+.time-lock-close:hover { opacity: 1; }
+
 .cam-playback-panel input[type="datetime-local"] {
   background: var(--bg);
   border: 1px solid var(--border);
@@ -640,6 +683,28 @@ body {
   opacity: 0.5;
   text-decoration: line-through;
 }
+
+/* ── Pause indicator ── */
+
+.cam-pause-indicator {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background: rgba(0, 0, 0, 0.5);
+  border-radius: 50%;
+  width: 56px;
+  height: 56px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.3s;
+  z-index: 10;
+}
+.cam-pause-indicator.visible { opacity: 1; }
+.cam.paused .cam-pause-indicator.visible { opacity: 0.8; }
 
 /* ── Seek Timeline (playback mode) ── */
 
