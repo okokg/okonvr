@@ -1,0 +1,45 @@
+services:
+  # 1. Backend reads oko.yaml, generates go2rtc.yaml, runs API
+  backend:
+    build: ./backend
+    container_name: oko-backend
+    restart: unless-stopped
+    environment:
+      - SERVER_IP=${SERVER_IP}
+      - WEBRTC_PORT=${WEBRTC_PORT:-8555}
+    volumes:
+      - backend-data:/data
+      - go2rtc-config:/config/go2rtc
+      - ./oko.yaml:/config/oko.yaml:ro
+
+  # 2. go2rtc reads auto-generated config from shared volume
+  go2rtc:
+    image: alexxit/go2rtc:latest
+    container_name: oko-go2rtc
+    restart: unless-stopped
+    ports:
+      - "${WEBRTC_PORT:-8555}:${WEBRTC_PORT:-8555}/tcp"
+      - "${WEBRTC_PORT:-8555}:${WEBRTC_PORT:-8555}/udp"
+    volumes:
+      - go2rtc-config:/config
+    depends_on:
+      - backend
+
+  # 3. nginx proxies to backend + go2rtc, serves static frontend
+  nginx:
+    image: nginx:alpine
+    container_name: oko-nginx
+    restart: unless-stopped
+    ports:
+      - "${HTTP_PORT:-8888}:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/.htpasswd:/etc/nginx/.htpasswd:ro
+      - ./web:/usr/share/nginx/html:ro
+    depends_on:
+      - backend
+      - go2rtc
+
+volumes:
+  backend-data:
+  go2rtc-config:

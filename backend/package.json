@@ -1,0 +1,22 @@
+{
+  "name": "okonvr",
+  "version": "0.1.0",
+  "description": "OKO NVR — Zero-storage WebRTC surveillance viewer with NVR archive playback",
+  "private": true,
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsx watch src/index.ts"
+  },
+  "dependencies": {
+    "fastify": "^4.28.0",
+    "better-sqlite3": "^11.0.0",
+    "yaml": "^2.4.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.0",
+    "tsx": "^4.7.0",
+    "@types/node": "^20.0.0",
+    "@types/better-sqlite3": "^7.6.0"
+  }
+}

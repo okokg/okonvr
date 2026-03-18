@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>OKO NVR PLAYER</title>
+  <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+
+  <header class="header">
+    <div class="header-left">
+      <div class="logo"></div>
+      <h1>OKO NVR PLAYER</h1>
+    </div>
+    <div class="header-right">
+      <div class="stats">
+        <span class="online" id="count-online">0</span> online
+        <span class="sep">&middot;</span>
+        <span class="offline" id="count-offline">0</span> offline
+        <span class="sep">&middot;</span>
+        <span class="bandwidth" id="bandwidth" title="Total bandwidth of all active streams">0 Mbps</span>
+      </div>
+      <div class="clock" id="clock"></div>
+      <button class="header-btn" id="compact-btn" title="Compact mode — hide header &amp; controls (C to toggle)">&#9881;</button>
+      <button class="header-btn" id="theme-btn" title="Toggle light/dark theme (T)">&#9788;</button>
+    </div>
+  </header>
+
+  <nav class="controls" id="controls">
+    <span class="controls-label">Grid:</span>
+    <button class="ctrl-btn grid-btn grid-btn-auto active" data-cols="auto" title="Auto-fit all cameras to screen (Ctrl+`)">Auto</button>
+    <button class="ctrl-btn grid-btn" data-cols="1" title="1 camera per row (Ctrl+1)">1&times;</button>
+    <button class="ctrl-btn grid-btn" data-cols="2" title="2 cameras per row (Ctrl+2)">2&times;</button>
+    <button class="ctrl-btn grid-btn" data-cols="4" title="4 cameras per row (Ctrl+3)">4&times;</button>
+    <button class="ctrl-btn grid-btn" data-cols="6" title="6 cameras per row (Ctrl+4)">6&times;</button>
+
+    <div class="controls-sep"></div>
+
+    <span class="controls-label">Show:</span>
+    <button class="ctrl-btn filter-btn active" data-filter="all" title="Show all cameras">All</button>
+    <button class="ctrl-btn filter-btn" data-filter="online" title="Show only connected cameras">Online</button>
+    <button class="ctrl-btn filter-btn" data-filter="offline" title="Show only disconnected cameras">Offline</button>
+
+    <div class="controls-sep"></div>
+
+    <div class="search-wrap">
+      <input type="text" class="search-input" id="search" placeholder="Search... 1,5-8" title="Filter by ID, name, or number range (e.g. 1,5-8)">
+      <button class="search-clear" id="search-clear">&times;</button>
+    </div>
+
+    <button class="ctrl-btn" id="refresh-btn" title="Reconnect all cameras (R)">&#x21bb;</button>
+  </nav>
+
+  <main class="grid cols-auto" id="grid"></main>
+
+  <div class="kbd-hint" id="kbd-hint"></div>
+
+  <script type="module">
+    import { App } from './js/app.js';
+    const app = new App();
+    app.start();
+  </script>
+  <script>document.body.tabIndex=-1;window.onload=()=>document.body.focus();</script>
+
+</body>
+</html>

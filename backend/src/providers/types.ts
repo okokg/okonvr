@@ -1,0 +1,108 @@
+/**
+ * NVR Provider types and interfaces.
+ * Each NVR vendor (Hikvision, Dahua, etc.) implements NvrProvider.
+ */
+
+export interface CameraConfig {
+  id: string;
+  channel: number;
+  label?: string;
+  group?: string;
+  // Generic provider: user-specified URLs
+  live_url?: string;
+  playback_url?: string;
+  probe_url?: string;
+}
+
+export interface NvrConfig {
+  provider: 'hikvision' | 'dahua' | 'generic';
+  host: string;
+  port: number;
+  http_port?: number;       // for ISAPI/CGI discovery (default 80)
+  username: string;
+  password: string;
+  // Hikvision-specific
+  sub_stream_suffix?: string;
+  main_stream_suffix?: string;
+}
+
+/** One NVR with its cameras. */
+export interface NvrEntry {
+  name: string;
+  config: NvrConfig;
+  cameras: CameraConfig[];
+  id_prefix: string;
+  /** true = auto-discover from NVR API */
+  discover: boolean;
+  /** Channel numbers to exclude after discovery */
+  exclude: number[];
+}
+
+export interface CodecInfo {
+  video: 'h264' | 'hevc' | 'unknown';
+  audio: 'pcmu' | 'pcma' | 'aac' | 'g7221' | 'none' | string;
+}
+
+export interface PlaybackOptions {
+  camera: CameraConfig;
+  start: Date;
+  end: Date;
+  resolution: string;
+  codecs: CodecInfo;
+}
+
+export interface PlaybackResult {
+  source: string;
+  forceMSE: boolean;
+}
+
+export interface NvrProvider {
+  readonly type: string;
+
+  /** RTSP base URL: rtsp://user:pass@host:port */
+  readonly rtspBase: string;
+
+  /** HTTP base URL for API: http://user:pass@host:http_port */
+  readonly httpBase: string;
+
+  /** Get live sub-stream URL for a camera. */
+  getLiveUrl(camera: CameraConfig): string;
+
+  /** Get live main-stream URL for a camera (for probing). */
+  getProbeUrl(camera: CameraConfig): string;
+
+  /** Get playback RTSP URL for a camera + time range. */
+  getPlaybackUrl(camera: CameraConfig, start: Date, end: Date): string;
+
+  /** Format a Date for NVR playback query (vendor-specific). */
+  formatTime(date: Date): string;
+
+  buildPlaybackSource(options: PlaybackOptions): PlaybackResult;
+
+  generateStreamConfig(cameras: CameraConfig[]): Record<string, string>;
+
+  validateCameraId(id: string): boolean;
+
+  /**
+   * Auto-discover cameras from NVR via HTTP API.
+   * Returns discovered cameras with channel numbers and optional names.
+   * Returns null if discovery is not supported or failed.
+   */
+  discoverChannels(): Promise<DiscoveredCamera[] | null>;
+}
+
+/** Camera discovered from NVR API. */
+export interface DiscoveredCamera {
+  channel: number;
+  name?: string;
+  online?: boolean;
+}
+
+/** Resolutions available for transcoding. null = original (no transcode). */
+export const RESOLUTIONS: Record<string, number | null> = {
+  'original': null,
+  '1080p': 1920,
+  '720p': 1280,
+  '480p': 854,
+  '360p': 640,
+};

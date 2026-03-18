@@ -1,0 +1,7 @@
+node_modules/
+dist/
+*.db
+oko.yaml
+.env
+.htpasswd
+go2rtc.yaml

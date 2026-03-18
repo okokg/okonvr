@@ -1,0 +1,55 @@
+# OKO NVR Configuration
+# Single source of truth for all NVR connections and cameras.
+# go2rtc.yaml is auto-generated from this file on startup.
+
+server:
+  port: 3000
+
+# go2rtc settings
+go2rtc:
+  api: http://go2rtc:1984
+  webrtc_port: 8555
+  # candidates are set via SERVER_IP in .env
+
+# FFmpeg settings for NVR archive playback
+ffmpeg:
+  timeout: 30
+  playback_input: "-fflags nobuffer -flags low_delay -buffer_size 1 -rtsp_transport tcp -timeout 30 -i {input}"
+
+# ── UI settings ──
+ui:
+  title: "OKO NVR"               # header title and browser tab
+  # locale: "en"                 # interface language (future)
+  default_grid: "auto"           # auto | 1 | 2 | 4 | 6 | 8 | 10
+  theme: "dark"                  # dark | light
+  compact: false                 # start in compact mode
+  stagger_ms: 500                # delay between camera connections (ms)
+  bitrate_interval: 5000         # bitrate refresh interval (ms)
+  sync_interval: 15000           # camera list sync interval (ms)
+
+# ── NVR list ──
+nvrs:
+  - name: office
+    provider: hikvision       # hikvision | dahua | generic
+    host: 192.168.0.2
+    port: 554
+    username: admin
+    password: changeme
+    id_prefix: "D"
+
+    # Channels — omit or use "*" for auto-discovery:
+    # channels: "*"                    # discover all from NVR (default)
+    # channels: "*, !12, !32"         # discover all, exclude 12 and 32
+    # channels: "1-31"                # manual range
+    # channels: "1,2,3,5,8,13"       # specific list
+    # channels: "1-10, 15-20, !7"    # mixed with exclusions
+
+  # Example: second NVR — discover all except channel 4
+  # - name: warehouse
+  #   enabled: false              # disable without removing config
+  #   provider: dahua
+  #   host: 192.168.1.10
+  #   username: admin
+  #   password: changeme2
+  #   id_prefix: "W"
+  #   channels: "*, !4"
