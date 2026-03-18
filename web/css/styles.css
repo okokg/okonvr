@@ -565,6 +565,7 @@ body {
 
 /* NVR offline state */
 .cam.nvr-offline { opacity: 0.4; }
+.cam.nvr-offline.fullscreen { opacity: 1; background: #000; }
 .cam.nvr-offline .cam-loading-text { color: var(--danger); }
 .cam.nvr-offline .cam-spinner circle:last-child { stroke: var(--danger); }
 

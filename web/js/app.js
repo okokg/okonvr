@@ -17,7 +17,7 @@ import { CamPlayer } from './player.js';
 import { NotificationManager } from './notifications.js';
 import { SEARCH_DEBOUNCE_MS, VERSION } from './config.js';
 
-(window._oko = window._oko || {}).app = 'a5e4';
+(window._oko = window._oko || {}).app = 'a5e5';
 
 export class App {
   constructor() {
@@ -186,6 +186,16 @@ export class App {
     // Frontend CB offline = groups disabled by connection error detection
     const frontendOffline = this._frontendOfflineNvrs || new Set();
 
+    // Clear frontend CB for groups that backend says are online
+    // (TCP is up → let cameras try again; they'll re-trigger CB if RTSP still fails)
+    for (const group of [...frontendOffline]) {
+      if (!backendOffline.has(group)) {
+        console.log(`[app] NVR "${group}": backend says online, clearing frontend circuit breaker`);
+        frontendOffline.delete(group);
+      }
+    }
+    this._frontendOfflineNvrs = frontendOffline;
+
     // Merged: offline if EITHER backend or frontend says so
     const offlineNvrs = new Set([...backendOffline, ...frontendOffline]);
 
@@ -206,17 +216,6 @@ export class App {
         }
       }
     }
-
-    // If backend says online AND frontend CB was triggered → clear frontend CB
-    // (meaning NVR TCP is up, let cameras try again)
-    for (const group of frontendOffline) {
-      if (!backendOffline.has(group)) {
-        // Backend says TCP is up — give cameras another chance
-        // They'll re-trigger CB if RTSP still fails
-        frontendOffline.delete(group);
-      }
-    }
-    this._frontendOfflineNvrs = frontendOffline;
 
     // Cameras in offline NVRs: force-stop on EVERY cycle. Online: staggered restart.
     const toRestart = [];
