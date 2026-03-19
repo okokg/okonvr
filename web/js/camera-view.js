@@ -10,7 +10,7 @@
 
 import { CamPlayer } from './player.js';
 
-(window._oko = window._oko || {}).cameraView = 'v4a2';
+(window._oko = window._oko || {}).cameraView = 'v4b1';
 
 export class CameraView {
   /**
@@ -85,9 +85,18 @@ export class CameraView {
   }
 
   /** Clear time lock button state. */
-  clearTimeLock() {
-    const btn = this.el.querySelector('.playback-lock');
-    if (btn) btn.classList.remove('active');
+  /** @returns {boolean} Whether camera is selected for investigation. */
+  get isSelected() { return this.el.classList.contains('cam-selected'); }
+
+  /** Toggle selection state. */
+  toggleSelect() {
+    const selected = this.el.classList.toggle('cam-selected');
+    if (this.onSelect) this.onSelect(this, selected);
+  }
+
+  /** Set selection state. */
+  setSelected(val) {
+    this.el.classList.toggle('cam-selected', val);
   }
 
   /** Toggle video pause. Live = freeze frame. Archive = real pause (stream destroyed). */
@@ -175,6 +184,11 @@ export class CameraView {
   /** Exit in-page fullscreen mode. */
   exitFullscreen() {
     this.el.classList.remove('fullscreen');
+    // Close playback panel
+    const panel = this.el.querySelector('.cam-playback-panel');
+    if (panel) panel.classList.remove('open');
+    const pbBtn = this.el.querySelector('.cam-playback-btn');
+    if (pbBtn) pbBtn.classList.remove('active');
     // Resume if paused
     if (this.el.classList.contains('paused')) {
       this.el.classList.remove('paused');
@@ -477,12 +491,6 @@ export class CameraView {
   onConnectionError = null;
 
   /**
-   * Called when user toggles time lock.
-   * @type {(camera: CameraView, locked: boolean, startTime: string, endTime: string, resolution: string) => void}
-   */
-  onTimeLock = null;
-
-  /**
    * Called when archive playback is paused (stream should be destroyed).
    * @type {(camera: CameraView) => void}
    */
@@ -493,6 +501,12 @@ export class CameraView {
    * @type {(camera: CameraView, position: Date) => void}
    */
   onPlaybackResume = null;
+
+  /**
+   * Called when camera is selected/deselected for investigation.
+   * @type {(camera: CameraView, selected: boolean) => void}
+   */
+  onSelect = null;
 
   // ── Playback ──
 
@@ -669,15 +683,20 @@ export class CameraView {
 
     const fill = this.el.querySelector('.seek-fill');
     const cursor = this.el.querySelector('.seek-cursor');
+    const cursorLine = this.el.querySelector('.seek-cursor-line');
+    const cursorTime = this.el.querySelector('.seek-cursor-time');
     fill.style.width = `${fraction * 100}%`;
     cursor.style.left = `${fraction * 100}%`;
+    cursorLine.style.left = `${fraction * 100}%`;
+    cursorTime.style.left = `${fraction * 100}%`;
 
     // Update now marker + unavailable zone (only for today)
     this._updateSeekAvailability();
 
-    // Update badge with current archive time
+    // Update cursor time label
     const pad = (n) => String(n).padStart(2, '0');
     const timeStr = `${pad(pos.getHours())}:${pad(pos.getMinutes())}:${pad(pos.getSeconds())}`;
+    cursorTime.textContent = timeStr;
     const dateStr = `${pad(pos.getDate())}.${pad(pos.getMonth() + 1)}`;
     this._modeBadge.innerHTML = `<span class="rec-dot">● REC</span><span class="rec-time">${timeStr}</span><span class="rec-date">${dateStr}</span>`;
     this._modeBadge.className = 'cam-mode playback';
@@ -800,6 +819,11 @@ export class CameraView {
         <svg viewBox="0 0 24 24" width="32" height="32" fill="white"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
       </div>
       <div class="cam-bitrate"></div>
+      <div class="cam-select" title="Select for investigation (Ctrl+Click)">
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5">
+          <polyline points="20 6 9 17 4 12"/>
+        </svg>
+      </div>
       <div class="cam-top-right">
         <div class="cam-quality-toggle" title="Toggle SD/HD stream (H)">
           <span class="quality-opt quality-sd active">SD</span>
@@ -812,12 +836,6 @@ export class CameraView {
       <div class="cam-playback-panel">
         <div class="playback-row">
           <input type="datetime-local" class="playback-start" title="Playback start time">
-          <button class="playback-lock" title="Lock time — apply to all cameras on click">
-            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5">
-              <rect x="5" y="11" width="14" height="10" rx="2"/>
-              <path d="M8 11V7a4 4 0 0 1 8 0v4"/>
-            </svg>
-          </button>
           <span class="playback-sep">&rarr;</span>
           <input type="datetime-local" class="playback-end" title="Playback end time">
         </div>
@@ -862,6 +880,8 @@ export class CameraView {
           <div class="seek-ticks"><span></span><span></span><span></span><span></span><span></span><span></span></div>
           <div class="seek-fill"></div>
           <div class="seek-cursor"></div>
+          <div class="seek-cursor-line"></div>
+          <div class="seek-cursor-time"></div>
           <div class="seek-unavailable"></div>
           <div class="seek-now"><span class="seek-now-label"></span></div>
         </div>
@@ -908,13 +928,24 @@ export class CameraView {
   }
 
   _bindDOMEvents() {
-    // click → fullscreen toggle
+    // click → fullscreen toggle (or Ctrl+click → select for investigation)
     this.el.addEventListener('click', (e) => {
       if (e.target.closest('.cam-quality-toggle')) return;
       if (e.target.closest('.cam-playback-btn')) return;
       if (e.target.closest('.cam-playback-panel')) return;
       if (e.target.closest('.cam-audio-wrap')) return;
+      if (e.target.closest('.cam-select')) return;
+      if ((e.ctrlKey || e.metaKey) && !this.el.classList.contains('fullscreen')) {
+        this.toggleSelect();
+        return;
+      }
       if (this.onClick) this.onClick(this);
+    });
+
+    // Checkbox click → toggle selection
+    this.el.querySelector('.cam-select').addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.toggleSelect();
     });
 
     // double-click → native fullscreen (grid), pause (in-page fullscreen)
@@ -1025,17 +1056,6 @@ export class CameraView {
           this.onQuickSeek(this, seekTime);
         }
       });
-    });
-
-    // Time lock button
-    this.el.querySelector('.playback-lock').addEventListener('click', (e) => {
-      e.stopPropagation();
-      const lockBtn = this.el.querySelector('.playback-lock');
-      const isLocked = lockBtn.classList.toggle('active');
-      const start = this.el.querySelector('.playback-start').value;
-      const end = this.el.querySelector('.playback-end').value;
-      const resolution = this.el.querySelector('.playback-resolution').value;
-      if (this.onTimeLock) this.onTimeLock(this, isLocked, start, end, resolution);
     });
 
     // Info tooltip on hover (grid mode)

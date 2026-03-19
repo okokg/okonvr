@@ -16,7 +16,7 @@ import {
   TIMELINE_RENDER_INTERVAL_MS, SWIPE_THRESHOLD_PX,
 } from './config.js';
 
-(window._oko = window._oko || {}).grid = 'g2d2';
+(window._oko = window._oko || {}).grid = 'g3a4';
 
 export class CameraGrid {
   /**
@@ -108,14 +108,14 @@ export class CameraGrid {
       view.onConnectionError = (cam) => {
         if (this.onConnectionError) this.onConnectionError(cam);
       };
-      view.onTimeLock = (cam, locked, start, end, resolution) => {
-        if (this.onTimeLock) this.onTimeLock(cam, locked, start, end, resolution);
-      };
       view.onPlaybackPause = (cam) => {
         if (this.onPlaybackPause) this.onPlaybackPause(cam);
       };
       view.onPlaybackResume = (cam, pos) => {
         if (this.onPlaybackResume) this.onPlaybackResume(cam, pos);
+      };
+      view.onSelect = (cam, selected) => {
+        if (this.onSelect) this.onSelect(cam, selected);
       };
 
       this.cameras.push(view);
@@ -201,7 +201,6 @@ export class CameraGrid {
    */
   refresh() {
     this.statusFilter = 'all';
-    // Update UI: deactivate status filter buttons
     document.querySelectorAll('.filter-btn').forEach(b => {
       b.classList.toggle('active', b.dataset.filter === 'all');
     });
@@ -210,12 +209,21 @@ export class CameraGrid {
     this.applyFilters();
   }
 
+  /** Set grid columns without wiping other classes like investigation-mode. */
+  setColumns(cols) {
+    // Remove old cols-* class
+    for (const c of [...this.gridEl.classList]) {
+      if (c.startsWith('cols-')) this.gridEl.classList.remove(c);
+    }
+    this.gridEl.classList.add(`cols-${cols}`);
+  }
+
   /** @returns {CameraView[]} Cameras currently visible. */
   get visibleCameras() {
     // Use DOM order (reflects drag-and-drop reordering)
     const domOrder = [...this.gridEl.children];
     return this.cameras
-      .filter(c => !c.el.classList.contains('hidden'))
+      .filter(c => !c.el.classList.contains('hidden') && !c.el.classList.contains('inv-hidden'))
       .sort((a, b) => domOrder.indexOf(a.el) - domOrder.indexOf(b.el));
   }
 
@@ -402,6 +410,43 @@ export class CameraGrid {
     const style = getComputedStyle(this.gridEl);
     const cols = style.gridTemplateColumns.split(' ').length;
     return cols || 4;
+  }
+
+  // ── Investigation mode (multi-cam sync) ──
+
+  _investigationMode = false;
+
+  get selectedCameras() { return this.cameras.filter(c => c.isSelected); }
+
+  enterInvestigationMode() {
+    this._investigationMode = true;
+    this.gridEl.classList.add('investigation-mode');
+    for (const cam of this.cameras) {
+      if (cam.isSelected) {
+        cam.el.classList.add('cam-synced');
+      } else {
+        cam.el.classList.add('inv-hidden');
+      }
+    }
+    if (this.autoFit) this._applyAutoFit();
+    this._updateStats();
+    console.log(`[grid] Investigation mode: ${this.selectedCameras.length} cameras`);
+  }
+
+  exitInvestigationMode() {
+    this._investigationMode = false;
+    this.gridEl.classList.remove('investigation-mode');
+    for (const cam of this.cameras) {
+      cam.el.classList.remove('inv-hidden');
+      cam.el.classList.remove('cam-synced');
+      cam.setSelected(false);
+    }
+    this._updateStats();
+    console.log('[grid] Investigation mode exited');
+  }
+
+  clearSelection() {
+    for (const cam of this.cameras) cam.setSelected(false);
   }
 
   // ── Private: event handlers ──

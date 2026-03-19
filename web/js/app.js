@@ -17,7 +17,7 @@ import { CamPlayer } from './player.js';
 import { NotificationManager } from './notifications.js';
 import { SEARCH_DEBOUNCE_MS, VERSION } from './config.js';
 
-(window._oko = window._oko || {}).app = 'a5f3';
+(window._oko = window._oko || {}).app = 'a6b6';
 
 export class App {
   constructor() {
@@ -143,7 +143,7 @@ export class App {
       if (btn) {
         document.querySelectorAll('.grid-btn').forEach(b => b.classList.remove('active'));
         btn.classList.add('active');
-        this.grid.gridEl.className = `grid cols-${c.default_grid}`;
+        this.grid.setColumns(c.default_grid);
         this.grid.autoFit = (c.default_grid === 'auto');
       }
     }
@@ -403,6 +403,10 @@ export class App {
 
     this.grid.onPlaybackRequest = (cam, start, end, resolution) => {
       this._startPlayback(cam, start, end, resolution);
+      // Investigation mode: sync start to all selected
+      if (this.grid._investigationMode) {
+        this._syncStartToSelected(cam, start, end, resolution);
+      }
     };
 
     this.grid.onLiveRequest = (cam) => {
@@ -411,6 +415,10 @@ export class App {
 
     this.grid.onPlaybackSeek = (cam, seekTime) => {
       this._seekPlayback(cam, seekTime);
+      // Investigation mode: sync seek to all selected
+      if (this.grid._investigationMode) {
+        this._syncSeekToSelected(cam, seekTime);
+      }
     };
 
     this.grid.onHdToggle = (cam, wantHd) => {
@@ -487,52 +495,6 @@ export class App {
       this.grid._updateStats();
     };
 
-    // Time lock: store locked time globally, auto-playback on camera open
-    this._lockedTime = null; // { start, end, resolution }
-    this._lockedCameras = []; // cameras with playback started in lock mode
-
-    this.grid.onTimeLock = (cam, locked, start, end, resolution) => {
-      if (locked && start) {
-        this._lockedTime = { start, end, resolution };
-        this._lockedCameras = [];
-        // Current camera is already playing — track it
-        if (cam.isPlayback) this._lockedCameras.push(cam);
-        console.log(`[app] Time locked: ${start} → ${end} (${resolution})`);
-        this._showTimeLockBadge();
-      } else {
-        this._clearTimeLock();
-      }
-    };
-
-    this.grid.onFullscreenEnter = (cam) => {
-      // Sync lock button state on new camera
-      if (this._lockedTime) {
-        const lockBtn = cam.el.querySelector('.playback-lock');
-        if (lockBtn) lockBtn.classList.add('active');
-
-        if (!cam.isPlayback) {
-          // Auto-start playback with locked time
-          const { start, end, resolution } = this._lockedTime;
-          console.log(`[app] ${cam.id}: auto-playback from locked time ${start}`);
-          this._lockedCameras.push(cam);
-          setTimeout(() => {
-            const startInput = cam.el.querySelector('.playback-start');
-            const endInput = cam.el.querySelector('.playback-end');
-            const resSelect = cam.el.querySelector('.playback-resolution');
-            if (startInput) startInput.value = start;
-            if (endInput) endInput.value = end;
-            if (resSelect) resSelect.value = resolution;
-            if (cam.onPlaybackRequest) {
-              cam.onPlaybackRequest(cam, start, end, resolution);
-            }
-          }, 200);
-        }
-      } else {
-        const lockBtn = cam.el.querySelector('.playback-lock');
-        if (lockBtn) lockBtn.classList.remove('active');
-      }
-    };
-
     // Archive pause: destroy stream, keep freeze frame
     this.grid.onPlaybackPause = async (cam) => {
       if (!cam.isPlayback) return;
@@ -542,14 +504,35 @@ export class App {
         cam._playbackPlayer.disable();
         cam._playbackPlayer = null;
       }
-      cam._playbackStream = null; // clear so isPlayback=false, prevents double-delete on resume
+      cam._playbackStream = null;
       await this.api.deletePlayback(streamName).catch(() => {});
+      // Investigation mode: sync pause to all selected
+      if (this.grid._investigationMode) {
+        this._syncPauseToSelected(cam);
+      }
     };
 
     // Archive resume: seek to saved position
     this.grid.onPlaybackResume = (cam, position) => {
       console.log(`[app] ${cam.id}: archive resume from ${position.toLocaleTimeString()}`);
       this._seekPlayback(cam, position);
+      // Investigation mode: sync resume to all selected
+      if (this.grid._investigationMode) {
+        this._syncResumeToSelected(cam, position);
+      }
+    };
+
+    // ── Investigation mode (multi-cam sync) ──
+
+    this._selectedCams = new Set();
+
+    this.grid.onSelect = (cam, selected) => {
+      if (selected) {
+        this._selectedCams.add(cam.id);
+      } else {
+        this._selectedCams.delete(cam.id);
+      }
+      this._updateSelectionBadge();
     };
   }
 
@@ -561,7 +544,7 @@ export class App {
         btn.classList.add('active');
         const cols = btn.dataset.cols;
         this.grid.autoFit = (cols === 'auto');
-        this.grid.gridEl.className = `grid cols-${cols}`;
+        this.grid.setColumns(cols);
         if (cols === 'auto') this.grid._applyAutoFit();
       });
     });
@@ -703,7 +686,7 @@ export class App {
           document.querySelectorAll('.grid-btn').forEach(b => b.classList.remove('active'));
           btn.classList.add('active');
           this.grid.autoFit = false;
-          this.grid.gridEl.className = `grid cols-${cols}`;
+          this.grid.setColumns(cols);
         });
         // Insert after last grid-btn
         const lastBtn = [...document.querySelectorAll('.grid-btn')].pop();
@@ -754,9 +737,15 @@ export class App {
         return;
       }
 
-      // Esc → exit fullscreen
+      // Esc → exit fullscreen, then investigation mode
       if (e.key === 'Escape') {
-        this.grid.exitFullscreen();
+        if (this.grid.fullscreenCamera) {
+          this.grid.exitFullscreen();
+        } else if (this.grid._investigationMode) {
+          this._stopInvestigation();
+        } else if (this._selectedCams.size > 0) {
+          this._clearSelection();
+        }
         return;
       }
 
@@ -853,8 +842,15 @@ export class App {
         return;
       }
 
-      // Enter / Space → open focused camera
-      if ((e.key === 'Enter' || e.key === ' ') && this.grid.focusedCamera) {
+      // Space → toggle selection on focused camera
+      if (e.key === ' ' && this.grid.focusedCamera) {
+        e.preventDefault();
+        this.grid.focusedCamera.toggleSelect();
+        return;
+      }
+
+      // Enter → open focused camera
+      if (e.key === 'Enter' && this.grid.focusedCamera) {
         e.preventDefault();
         this.grid.openFocused();
         return;
@@ -948,50 +944,114 @@ export class App {
     }
   }
 
-  // ── Time Lock ──
+  // ── Investigation mode ──
 
-  _showTimeLockBadge() {
-    // Remove existing badge
-    document.querySelector('.time-lock-badge')?.remove();
-
-    if (!this._lockedTime) return;
-    const t = this._lockedTime.start;
-    // Extract time portion (HH:MM) from datetime-local string
-    const timeStr = t.includes('T') ? t.split('T')[1].substring(0, 5) : t.substring(11, 16);
-    const dateStr = t.includes('T') ? t.split('T')[0].substring(5).replace('-', '.') : t.substring(5, 10).replace('-', '.');
-
+  _updateSelectionBadge() {
+    document.querySelector('.selection-badge')?.remove();
+    const count = this._selectedCams.size;
+    if (count === 0) return;
+    const controls = document.querySelector('.controls');
+    if (!controls) return;
     const badge = document.createElement('div');
-    badge.className = 'time-lock-badge';
-    badge.innerHTML = `<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg><span>${dateStr} ${timeStr}</span><span class="time-lock-close">✕</span>`;
-    badge.querySelector('.time-lock-close').addEventListener('click', (e) => {
+    badge.className = 'selection-badge';
+    badge.innerHTML = `<span class="sel-count">${count} selected</span><button class="sel-start">Start</button><span class="sel-close">x</span>`;
+    badge.querySelector('.sel-start').addEventListener('click', (e) => { e.stopPropagation(); this._startInvestigation(); });
+    badge.querySelector('.sel-close').addEventListener('click', (e) => {
       e.stopPropagation();
-      this._clearTimeLock();
+      if (this.grid._investigationMode) {
+        this._stopInvestigation();
+      } else {
+        this._clearSelection();
+      }
     });
+    controls.appendChild(badge);
+  }
 
-    // Insert after stats in header
-    const controls = document.getElementById('controls');
-    const searchWrap = controls.querySelector('.search-wrap');
-    if (searchWrap) {
-      controls.insertBefore(badge, searchWrap);
-    } else {
-      controls.appendChild(badge);
+  _startInvestigation() {
+    if (this._selectedCams.size === 0) return;
+    console.log(`[app] Investigation mode: ${this._selectedCams.size} cameras`);
+
+    // Stop all non-selected cameras to free resources
+    for (const cam of this.grid.cameras) {
+      if (!cam.isSelected && cam.player.enabled) {
+        cam.disable();
+      }
+    }
+
+    this.grid.enterInvestigationMode();
+    const startBtn = document.querySelector('.selection-badge .sel-start');
+    if (startBtn) startBtn.remove();
+    const countEl = document.querySelector('.selection-badge .sel-count');
+    if (countEl) countEl.textContent = `${this._selectedCams.size} synced`;
+    this._showHint(`Investigation: ${this._selectedCams.size} cameras`);
+  }
+
+  _stopInvestigation() {
+    console.log('[app] Stopping investigation mode');
+    // 1. Kill all active streams: playback + SD + HD on every camera
+    for (const cam of this.grid.cameras) {
+      if (cam.isPlayback || cam._pausedPosition) this._stopPlayback(cam);
+      cam.disable();
+    }
+    // 2. Exit investigation mode (unhide all, clear selection)
+    this.grid.exitInvestigationMode();
+    this._selectedCams.clear();
+    document.querySelector('.selection-badge')?.remove();
+    // 3. Restart all cameras with staggered start
+    this.grid.applyFilters();
+    this._showHint('Investigation ended');
+  }
+
+  _clearSelection() {
+    this._selectedCams.clear();
+    this.grid.clearSelection();
+    document.querySelector('.selection-badge')?.remove();
+  }
+
+  _syncStartToSelected(sourceCam, start, end, resolution) {
+    for (const cam of this.grid.selectedCameras) {
+      if (cam === sourceCam || cam.isPlayback) continue;
+      console.log(`[app] Sync start: ${cam.id}`);
+      this._startPlayback(cam, start, end, resolution);
     }
   }
 
-  _clearTimeLock() {
-    // Stop playback on all cameras started in lock mode
-    if (this._lockedCameras && this._lockedCameras.length > 0) {
-      console.log(`[app] Time lock: stopping ${this._lockedCameras.length} playback streams`);
-      for (const cam of this._lockedCameras) {
-        this._stopPlayback(cam);
-      }
+  _syncSeekToSelected(sourceCam, seekTime) {
+    for (const cam of this.grid.selectedCameras) {
+      if (cam === sourceCam) continue;
+      if (!cam.isPlayback && !cam._pausedPosition) continue;
+      console.log(`[app] Sync seek: ${cam.id}`);
+      this._seekPlayback(cam, seekTime);
     }
-    this._lockedCameras = [];
-    this._lockedTime = null;
-    document.querySelector('.time-lock-badge')?.remove();
-    // Clear active state on all lock buttons
-    this.grid.cameras.forEach(c => c.clearTimeLock());
-    console.log('[app] Time lock cleared');
+  }
+
+  async _syncPauseToSelected(sourceCam) {
+    const position = sourceCam._pausedPosition;
+    for (const cam of this.grid.selectedCameras) {
+      if (cam === sourceCam || !cam.isPlayback) continue;
+      console.log(`[app] Sync pause: ${cam.id}`);
+      cam._pausedPosition = position ? new Date(position) : cam.playbackPosition;
+      cam._captureFrame();
+      cam.stopPlaybackTimer();
+      cam.video.pause();
+      cam.el.classList.add('paused');
+      cam._showPauseIndicator('pause');
+      const streamName = cam.playbackStreamName;
+      if (cam._playbackPlayer) { cam._playbackPlayer.disable(); cam._playbackPlayer = null; }
+      cam._playbackStream = null;
+      await this.api.deletePlayback(streamName).catch(() => {});
+    }
+  }
+
+  _syncResumeToSelected(sourceCam, position) {
+    for (const cam of this.grid.selectedCameras) {
+      if (cam === sourceCam || !cam._pausedPosition) continue;
+      console.log(`[app] Sync resume: ${cam.id}`);
+      cam.el.classList.remove('paused');
+      cam._showPauseIndicator('play');
+      cam._pausedPosition = null;
+      this._seekPlayback(cam, position);
+    }
   }
 
   /** Cleanup all playback streams on page unload. */
