@@ -183,3 +183,35 @@ export async function checkHealth(): Promise<boolean> {
     return false;
   }
 }
+
+/**
+ * Ensure all base camera streams exist in go2rtc.
+ * Re-registers any missing streams (e.g. after go2rtc crash/restart).
+ */
+export async function ensureBaseStreams(
+  allIds: string[],
+  getStreamUrl: (id: string) => string | null
+): Promise<void> {
+  try {
+    const existing = await fetchStreams();
+    const existingSet = new Set(existing);
+    const missing = allIds.filter(id => !existingSet.has(id));
+    if (missing.length === 0) return;
+
+    console.log(`[stream-recovery] go2rtc missing ${missing.length}/${allIds.length} base streams, re-registering...`);
+    let restored = 0;
+    for (const id of missing) {
+      const url = getStreamUrl(id);
+      if (!url) continue;
+      try {
+        await createStream(id, url);
+        restored++;
+      } catch (e: any) {
+        console.warn(`[stream-recovery] Failed to restore ${id}: ${e.message}`);
+      }
+    }
+    console.log(`[stream-recovery] Restored ${restored}/${missing.length} streams`);
+  } catch (e: any) {
+    // go2rtc unreachable — skip silently
+  }
+}

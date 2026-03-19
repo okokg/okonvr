@@ -10,7 +10,7 @@
 
 import { CamPlayer } from './player.js';
 
-(window._oko = window._oko || {}).cameraView = 'v4b1';
+(window._oko = window._oko || {}).cameraView = 'v4b8';
 
 export class CameraView {
   /**
@@ -110,11 +110,11 @@ export class CameraView {
       this.el.classList.remove('paused');
       this._showPauseIndicator('play');
       if (this._pausedPosition && this.onPlaybackResume) {
-        // Archive: resume 1s before pause point (compensate for startup lag)
         const resumeTime = new Date(this._pausedPosition.getTime() - 1000);
         this.onPlaybackResume(this, resumeTime);
         this._pausedPosition = null;
       } else {
+        this._clearFreezeFrame();
         v.play();
       }
     } else {
@@ -122,31 +122,69 @@ export class CameraView {
       this.el.classList.add('paused');
       this._showPauseIndicator('pause');
       if (this.isPlayback) {
-        // Archive: capture frame, save position, destroy stream
-        this._pausedPosition = this.playbackPosition;
-        this._captureFrame(); // save current frame as poster
-        this.stopPlaybackTimer();
+        this._captureFrame();       // capture BEFORE pause — video definitely has decoded frame
         v.pause();
-        if (this.onPlaybackPause) this.onPlaybackPause(this);
+        this.stopPlaybackTimer();
+        const position = this.playbackPosition;
+        const hasFreezeFrame = this.el.querySelector('.cam-freeze')?.classList.contains('visible');
+        if (hasFreezeFrame) {
+          this._pausedPosition = position;
+          if (this.onPlaybackPause) this.onPlaybackPause(this);
+        }
       } else {
-        // Live: simple freeze
+        this._captureFrame();       // freeze-frame for live pause too
         v.pause();
       }
     }
+    // Refresh info tooltip to show/hide PAUSED
+    const p = this._playbackPlayer || this._hdPlayer || this.player;
+    if (p) this._updateInfoTooltip(p, p.bitrate || 0);
   }
 
-  /** Capture current video frame to poster so it persists after stream destroy. */
+  /** Capture current video frame to overlay img (reliable across all browsers). */
   _captureFrame() {
     const v = this.video;
-    if (!v || !v.videoWidth) return;
+    const img = this.el.querySelector('.cam-freeze');
+    if (!v || !v.videoWidth || !img) return false;
     try {
       const c = document.createElement('canvas');
       c.width = v.videoWidth;
       c.height = v.videoHeight;
       c.getContext('2d').drawImage(v, 0, 0);
-      v.poster = c.toDataURL('image/jpeg', 0.85);
+      img.src = c.toDataURL('image/jpeg', 0.85);
+      img.classList.add('visible');
+      return true;
     } catch (e) {
-      // CORS / tainted canvas — ignore
+      // CORS / tainted canvas
+      return false;
+    }
+  }
+
+  /** Capture frame with retry — videoWidth can be 0 briefly after v.pause(). */
+  _captureFrameWithRetry(onSuccess, attempt = 0) {
+    if (this._captureFrame()) {
+      if (onSuccess) onSuccess();
+      return Promise.resolve(true);
+    }
+    if (attempt < 5) {
+      return new Promise(resolve => {
+        setTimeout(() => {
+          this._captureFrameWithRetry(onSuccess, attempt + 1).then(resolve);
+        }, 50);
+      });
+    }
+    // All retries failed — still fire callback so stream gets destroyed
+    console.log(`[camera-view] ${this.id}: freeze-frame capture failed after ${attempt} retries`);
+    if (onSuccess) onSuccess();
+    return Promise.resolve(false);
+  }
+
+  /** Hide freeze-frame overlay. */
+  _clearFreezeFrame() {
+    const img = this.el.querySelector('.cam-freeze');
+    if (img) {
+      img.classList.remove('visible');
+      img.src = '';
     }
   }
 
@@ -305,7 +343,7 @@ export class CameraView {
   _hideLoading() {
     this._loading.style.display = 'none';
     this._stopRenderCheck();
-    this.video.poster = ''; // clear captured pause frame now that real frames are rendering
+    this._clearFreezeFrame();
   }
 
   /** Poll until video actually has frames, then hide loading. */
@@ -313,19 +351,21 @@ export class CameraView {
     this._stopRenderCheck();
     this._renderCheckTimer = setInterval(() => {
       if (this.video.videoWidth > 0 && this.video.videoHeight > 0) {
-        if (this.video.poster) {
-          // Resuming from pause: hide spinner, buffer 2s behind poster, then reveal
+        const hasFreezeFrame = this.el.querySelector('.cam-freeze')?.classList.contains('visible');
+        if (hasFreezeFrame) {
+          // Resuming from pause: videoWidth>0 means decoder has rendered a frame.
+          // Short delay for paint, then reveal.
           clearInterval(this._renderCheckTimer);
           this._renderCheckTimer = null;
-          this._loading.style.display = 'none'; // hide spinner, poster stays
+          this._loading.style.display = 'none';
           this._renderBufferTimer = setTimeout(() => {
-            this.video.poster = ''; // reveal live stream
-          }, 2000);
+            this._clearFreezeFrame();
+          }, 150);
         } else {
           this._hideLoading();
         }
       }
-    }, 500);
+    }, 200);
   }
 
   _stopRenderCheck() {
@@ -372,6 +412,9 @@ export class CameraView {
       parts.push(full
         ? (this.codec === 'hevc' ? 'H.265' : 'H.264')
         : (this.codec === 'hevc' ? 'H265' : 'H264'));
+    }
+    if (this.el.classList.contains('paused')) {
+      parts.push('PAUSED');
     }
     this._infoTooltip.textContent = parts.join(full ? ' · ' : '·');
 
@@ -528,7 +571,7 @@ export class CameraView {
   startPlayback(streamName, startTime, endTime, forceMSE = false, resolution = 'original') {
     this.stopPlaybackTimer();
     this._clearPendingChange();
-    // NOTE: video.poster preserved here — cleared in _hideLoading when frames arrive
+    // NOTE: freeze frame preserved here — cleared in _hideLoading when real frames arrive
 
     // CRITICAL: stop previous playback player to prevent retry loops
     if (this._playbackPlayer) {
@@ -615,7 +658,7 @@ export class CameraView {
   stopPlayback() {
     this.stopPlaybackTimer();
     clearInterval(this._nowMarkerTimer);
-    this.video.poster = '';
+    this._clearFreezeFrame();
     this._pausedPosition = null;
     this.el.classList.remove('paused');
     const ind = this.el.querySelector('.cam-pause-indicator');
@@ -815,6 +858,7 @@ export class CameraView {
         <span class="cam-loading-text">connecting</span>
       </div>
       <video muted autoplay playsinline></video>
+      <img class="cam-freeze" alt="">
       <div class="cam-pause-indicator">
         <svg viewBox="0 0 24 24" width="32" height="32" fill="white"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
       </div>

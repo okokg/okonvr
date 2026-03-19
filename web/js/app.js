@@ -17,7 +17,7 @@ import { CamPlayer } from './player.js';
 import { NotificationManager } from './notifications.js';
 import { SEARCH_DEBOUNCE_MS, VERSION } from './config.js';
 
-(window._oko = window._oko || {}).app = 'a6b6';
+(window._oko = window._oko || {}).app = 'a6c1';
 
 export class App {
   constructor() {
@@ -501,7 +501,7 @@ export class App {
       const streamName = cam.playbackStreamName;
       console.log(`[app] ${cam.id}: archive paused at ${cam._pausedPosition?.toLocaleTimeString()}, destroying ${streamName}`);
       if (cam._playbackPlayer) {
-        cam._playbackPlayer.disable();
+        cam._playbackPlayer.disable(); // img overlay covers video — safe to fully reset
         cam._playbackPlayer = null;
       }
       cam._playbackStream = null;
@@ -1030,16 +1030,22 @@ export class App {
     for (const cam of this.grid.selectedCameras) {
       if (cam === sourceCam || !cam.isPlayback) continue;
       console.log(`[app] Sync pause: ${cam.id}`);
-      cam._pausedPosition = position ? new Date(position) : cam.playbackPosition;
-      cam._captureFrame();
-      cam.stopPlaybackTimer();
+      cam._captureFrame();          // capture BEFORE pause
       cam.video.pause();
+      cam.stopPlaybackTimer();
       cam.el.classList.add('paused');
       cam._showPauseIndicator('pause');
-      const streamName = cam.playbackStreamName;
-      if (cam._playbackPlayer) { cam._playbackPlayer.disable(); cam._playbackPlayer = null; }
-      cam._playbackStream = null;
-      await this.api.deletePlayback(streamName).catch(() => {});
+      const hasFreezeFrame = cam.el.querySelector('.cam-freeze')?.classList.contains('visible');
+      if (hasFreezeFrame) {
+        cam._pausedPosition = position ? new Date(position) : cam.playbackPosition;
+        const streamName = cam.playbackStreamName;
+        if (cam._playbackPlayer) {
+          cam._playbackPlayer.disable();
+          cam._playbackPlayer = null;
+        }
+        cam._playbackStream = null;
+        await this.api.deletePlayback(streamName).catch(() => {});
+      }
     }
   }
 

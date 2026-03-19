@@ -16,7 +16,7 @@ import {
   MSE_OPEN_TIMEOUT_MS, STALE_STREAM_MS,
 } from './config.js';
 
-(window._oko = window._oko || {}).player = 'p4b2';
+(window._oko = window._oko || {}).player = 'p4b5';
 
 export class CamPlayer {
   /**

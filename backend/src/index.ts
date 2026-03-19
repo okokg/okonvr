@@ -3,7 +3,7 @@ import { loadConfig } from './config';
 import { initDb, ensureCameraRows } from './db';
 import { createProvider } from './providers';
 import { registry } from './services/camera-registry';
-import { initStreamManager, cleanupAllInternal, reapOrphanStreams } from './services/stream-manager';
+import { initStreamManager, cleanupAllInternal, reapOrphanStreams, ensureBaseStreams } from './services/stream-manager';
 import { generateGo2rtcConfig } from './services/go2rtc-config';
 import { startConfigWatcher } from './services/config-watcher';
 import { probeCodecs } from './services/codec-prober';
@@ -88,6 +88,16 @@ async function main() {
 
   // Reap orphaned HD/playback/transcode streams every 15s (30s TTL)
   setInterval(() => reapOrphanStreams(30000), 15000);
+
+  // Auto-recover base streams if go2rtc lost them (crash/restart) — check every 60s
+  setInterval(() => {
+    const ids = registry.allIds();
+    ensureBaseStreams(ids, (id) => {
+      const entry = registry.getEntry(id);
+      if (!entry) return null;
+      return entry.provider.getLiveUrl(entry.camera);
+    });
+  }, 60000);
 
   // Background: probe codecs for all cameras (detects audio)
   setTimeout(() => probeAllCodecs(), 10000);
