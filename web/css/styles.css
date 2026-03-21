@@ -616,6 +616,21 @@ body {
   border-color: rgba(232, 168, 50, 0.5);
 }
 
+/* Loading fill-wipe: background slides left→right */
+.quality-opt.loading {
+  background-size: 200% 100% !important;
+  background-color: transparent !important;
+  animation: quality-fill 3s linear forwards;
+  color: #fff;
+}
+.quality-sd.loading {
+  background-image: linear-gradient(to right, var(--accent) 50%, rgba(29,158,117,0.15) 50%) !important;
+}
+.quality-hd.loading {
+  background-image: linear-gradient(to right, var(--warn) 50%, rgba(232,168,50,0.15) 50%) !important;
+}
+@keyframes quality-fill { from { background-position: 100% 0; } to { background-position: 0% 0; } }
+
 .quality-res {
   font-family: var(--mono);
   font-size: 8px;
@@ -870,6 +885,7 @@ body {
 /* NVR offline state */
 .cam.nvr-offline { opacity: 0.4; }
 .cam.nvr-offline.fullscreen { opacity: 1; background: #000; }
+.cam.nvr-offline .cam-loading { background: rgba(0, 0, 0, 0.75); }
 .cam.nvr-offline .cam-loading-text { color: var(--danger); }
 .cam.nvr-offline .cam-spinner circle:last-child { stroke: var(--danger); }
 .cam.nvr-offline .cam-loading-dots { display: none; }

@@ -83,6 +83,9 @@ export interface NvrProvider {
   /** Get HTTP snapshot URL (JPEG) for a camera. */
   getSnapshotUrl(camera: CameraConfig): string;
 
+  /** Get HTTP snapshot URL from archive at specific time. Returns null if not supported. */
+  getPlaybackSnapshotUrl?(camera: CameraConfig, time: Date): string | null;
+
   buildPlaybackSource(options: PlaybackOptions): PlaybackResult;
 
   generateStreamConfig(cameras: CameraConfig[]): Record<string, string>;

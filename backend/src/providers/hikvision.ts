@@ -51,6 +51,12 @@ export class HikvisionProvider implements NvrProvider {
     return `${this.httpBase}/ISAPI/Streaming/channels/${track}/picture`;
   }
 
+  getPlaybackSnapshotUrl(camera: CameraConfig, time: Date): string {
+    const track = this.channelToTrack(camera.channel, this.mainSuffix);
+    const t = this.formatTime(time);
+    return `${this.httpBase}/ISAPI/ContentMgmt/StreamingProxy/channels/${track}/picture?starttime=${t}`;
+  }
+
   getPlaybackUrl(camera: CameraConfig, start: Date, end: Date): string {
     const track = this.channelToTrack(camera.channel, this.mainSuffix);
     const st = this.formatTime(start);

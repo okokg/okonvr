@@ -1057,7 +1057,12 @@ export class App {
 
         // H = HD toggle
         if (code === 'KeyH' && !e.ctrlKey && !e.metaKey) {
-          if (!cam.isPlayback) this._toggleHd(cam, !cam.isHd);
+          if (!cam.isPlayback) {
+            const wantHd = !cam.isHd;
+            const target = cam._qualityToggle?.querySelector(wantHd ? '.quality-hd' : '.quality-sd');
+            if (target && !target.classList.contains('active')) target.classList.add('loading');
+            this._toggleHd(cam, wantHd);
+          }
           return;
         }
 
@@ -1149,6 +1154,10 @@ export class App {
         this._showHint(`${cam.id} → HD`);
       } catch (err) {
         console.error(`[app] ${cam.id}: HD failed: ${err.message}`);
+        // Restore toggle state
+        cam._qualityToggle?.querySelectorAll('.loading').forEach(el => el.classList.remove('loading'));
+        cam._qualityToggle?.querySelector('.quality-sd')?.classList.add('active');
+        cam._pendingQuality = null;
         this._showHint(`HD error: ${err.message}`);
       }
     } else {

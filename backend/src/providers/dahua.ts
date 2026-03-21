@@ -31,6 +31,10 @@ export class DahuaProvider implements NvrProvider {
     return `${this.httpBase}/cgi-bin/snapshot.cgi?channel=${camera.channel}`;
   }
 
+  getPlaybackSnapshotUrl(_camera: CameraConfig, _time: Date): null {
+    return null; // Dahua has no single-frame archive snapshot API
+  }
+
   getPlaybackUrl(camera: CameraConfig, start: Date, end: Date): string {
     const st = this.formatTime(start);
     const et = this.formatTime(end);

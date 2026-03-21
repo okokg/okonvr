@@ -59,6 +59,7 @@ export class CameraView {
     // HD state
     this._hdPlayer = null;
     this._hdStream = null;
+    this._pendingQuality = null;
 
     // Digital zoom state
     this._zoom = { scale: 1, tx: 0, ty: 0 };
@@ -464,9 +465,10 @@ export class CameraView {
     const useMSE = forceMSE && !CamPlayer.h265WebRTCSupported;
     this._switchPlayer(this._hdPlayer, useMSE ? 'mse' : 'start');
 
-    // Update toggle state
+    // Don't set .active yet — loading animation still running.
+    // _hideLoading will finalize the toggle state.
     this._qualityToggle.querySelector('.quality-sd').classList.remove('active');
-    this._qualityToggle.querySelector('.quality-hd').classList.add('active');
+    this._pendingQuality = 'hd';
     this._qualityToggle.classList.add('hd-active');
   }
 
@@ -481,9 +483,8 @@ export class CameraView {
     this._showLoading('switching to sd');
     this._switchPlayer(this.player);
 
-    // Update toggle state
     this._qualityToggle.querySelector('.quality-hd').classList.remove('active');
-    this._qualityToggle.querySelector('.quality-sd').classList.add('active');
+    this._pendingQuality = 'sd';
     this._qualityToggle.classList.remove('hd-active');
   }
 
@@ -539,6 +540,13 @@ export class CameraView {
     this._loading.style.display = 'none';
     this._stopRenderCheck();
     this._clearFreezeFrame();
+    // Clear quality toggle loading state and finalize active
+    this._qualityToggle.querySelectorAll('.quality-opt.loading').forEach(el => el.classList.remove('loading'));
+    if (this._pendingQuality) {
+      const target = this._qualityToggle.querySelector(`.quality-${this._pendingQuality}`);
+      if (target) target.classList.add('active');
+      this._pendingQuality = null;
+    }
     // Fade out snapshot overlay once real video is playing
     if (this._snapshot && !this._snapshot.classList.contains('loaded')) {
       this._snapshot.classList.add('loaded');
@@ -1844,8 +1852,16 @@ export class CameraView {
     // SD/HD quality toggle
     this._qualityToggle.addEventListener('click', (e) => {
       e.stopPropagation();
-      if (this.isPlayback) return; // don't switch during archive playback
-      if (this.onHdToggle) this.onHdToggle(this, !this.isHd);
+      if (this.isPlayback) return;
+
+      // Detect which button was clicked
+      const clickedOpt = e.target.closest('.quality-opt');
+      if (!clickedOpt || clickedOpt.classList.contains('active')) return; // already in this mode
+
+      const wantHd = clickedOpt.classList.contains('quality-hd');
+      // Show loading fill-wipe on the clicked (target) button
+      clickedOpt.classList.add('loading');
+      if (this.onHdToggle) this.onHdToggle(this, wantHd);
     });
 
     // Playback button — toggle panel
@@ -2125,79 +2141,103 @@ export class CameraView {
           if (this._thumbXHR) { this._thumbXHR.abort(); this._thumbXHR = null; }
 
           const thisHours = hours, thisMinutes = minutes;
+          const clampedLeft = seekThumb.style.left; // already clamped
 
-          // Stage 1: 500ms pause → show dot + ring (2s)
+          // 500ms pause → show dot + start fetch immediately (ring = real progress)
           thumbDotTimer = setTimeout(() => {
             if (thumbLastKey !== key) return;
-            thumbState = 'dot';
+            thumbState = 'loading';
             seekDot.classList.add('visible');
             if (seekThumbTime) seekThumbTime.textContent = `${pad2(thisHours)}:${pad2(thisMinutes)}`;
-            requestAnimationFrame(() => {
+
+            // Show marker dot on timeline
+            if (seekMarker) {
+              seekMarker.style.left = pct;
+              seekMarker.classList.add('visible');
+            }
+
+            // Reset ring to full offset (empty)
+            if (seekRingFill) {
+              seekRingFill.style.transition = 'none';
+              seekRingFill.style.strokeDashoffset = '53.4';
+            }
+
+            // Start fetch
+            const thumbDate = new Date(thumbDate0);
+            thumbDate.setHours(thisHours, thisMinutes, 0, 0);
+            const iso = `${thumbDate.getFullYear()}-${pad2(thumbDate.getMonth()+1)}-${pad2(thumbDate.getDate())}T${pad2(thisHours)}:${pad2(thisMinutes)}:00`;
+
+            const xhr = new XMLHttpRequest();
+            this._thumbXHR = xhr;
+            xhr.open('GET', `/backend/playback-thumbnail/${this.id}?t=${iso}`);
+            xhr.responseType = 'blob';
+
+            // Ring progress driven by XHR
+            let ringStarted = false;
+            xhr.onprogress = (evt) => {
+              if (thumbLastKey !== key) return;
+              if (evt.lengthComputable && seekRingFill) {
+                const p = evt.loaded / evt.total;
+                seekRingFill.style.transition = 'stroke-dashoffset 0.2s';
+                seekRingFill.style.strokeDashoffset = `${53.4 * (1 - p)}`;
+              } else if (!ringStarted && seekRingFill) {
+                // No Content-Length — animate ring over 3s as estimate
+                ringStarted = true;
+                seekRingFill.style.transition = 'stroke-dashoffset 3s linear';
+                seekRingFill.style.strokeDashoffset = '5'; // leave 10% gap
+              }
+            };
+
+            // If no progress events after 100ms, start indeterminate ring
+            const ringFallback = setTimeout(() => {
+              if (thumbLastKey !== key || ringStarted) return;
+              ringStarted = true;
               if (seekRingFill) {
-                seekRingFill.style.transition = 'stroke-dashoffset 2s linear';
+                seekRingFill.style.transition = 'stroke-dashoffset 3s linear';
+                seekRingFill.style.strokeDashoffset = '5';
+              }
+            }, 100);
+
+            xhr.onload = () => {
+              clearTimeout(ringFallback);
+              this._thumbXHR = null;
+              if (thumbLastKey !== key || xhr.status !== 200) return;
+              thumbState = 'pinned';
+              thumbPinnedTime = { hours: thisHours, minutes: thisMinutes };
+              thumbPinnedPct = pct;
+
+              // Complete ring
+              if (seekRingFill) {
+                seekRingFill.style.transition = 'stroke-dashoffset 0.15s';
                 seekRingFill.style.strokeDashoffset = '0';
               }
-            });
 
-            // Stage 2: ring done → show frame + fetch
-            thumbFetchTimer = setTimeout(() => {
-              if (thumbLastKey !== key || thumbState !== 'dot') return;
-              thumbState = 'loading';
-              seekDot.classList.remove('visible');
-              seekThumb.classList.add('visible');
-              if (seekThumbProgress) { seekThumbProgress.style.transition = 'none'; seekThumbProgress.style.width = '0'; }
-
-              // Show marker dot on timeline
-              if (seekMarker) {
-                seekMarker.style.left = pct;
-                seekMarker.classList.add('visible');
-              }
-
-              const thumbDate = new Date(thumbDate0);
-              thumbDate.setHours(thisHours, thisMinutes, 0, 0);
-              const iso = `${thumbDate.getFullYear()}-${pad2(thumbDate.getMonth()+1)}-${pad2(thumbDate.getDate())}T${pad2(thisHours)}:${pad2(thisMinutes)}:00`;
-
-              const xhr = new XMLHttpRequest();
-              this._thumbXHR = xhr;
-              xhr.open('GET', `/backend/playback-thumbnail/${this.id}?t=${iso}`);
-              xhr.responseType = 'blob';
-
-              xhr.onprogress = (evt) => {
-                if (thumbLastKey !== key || !seekThumbProgress) return;
-                if (evt.lengthComputable) {
-                  const p = Math.round((evt.loaded / evt.total) * 100);
-                  seekThumbProgress.style.transition = 'width 0.2s';
-                  seekThumbProgress.style.width = `${p}%`;
-                }
-              };
-
-              xhr.onload = () => {
-                this._thumbXHR = null;
-                if (thumbLastKey !== key || xhr.status !== 200) return;
-                thumbState = 'pinned';
-                thumbPinnedTime = { hours: thisHours, minutes: thisMinutes };
-                thumbPinnedPct = pct;
-                if (seekThumbProgress) { seekThumbProgress.style.transition = 'width 0.15s'; seekThumbProgress.style.width = '100%'; }
+              // After ring completes → show thumbnail
+              setTimeout(() => {
+                if (thumbLastKey !== key) return;
+                seekDot.classList.remove('visible');
                 if (seekThumbSpinner) seekThumbSpinner.style.display = 'none';
-                seekThumb.classList.add('pinned');
+                if (seekThumbProgress) { seekThumbProgress.style.transition = 'none'; seekThumbProgress.style.width = '100%'; }
+                seekThumb.classList.add('visible', 'pinned');
                 const url = URL.createObjectURL(xhr.response);
                 if (seekThumbImg) {
                   seekThumbImg.onload = () => URL.revokeObjectURL(url);
                   seekThumbImg.src = url;
                   seekThumbImg.style.opacity = '1';
                 }
-              };
+              }, 200);
+            };
 
-              xhr.onerror = () => {
-                this._thumbXHR = null;
-                if (thumbLastKey !== key) return;
-                seekThumb.classList.remove('visible');
-                seekMarker?.classList.remove('visible');
-                thumbState = 'idle';
-              };
+            xhr.onerror = () => {
+              clearTimeout(ringFallback);
+              this._thumbXHR = null;
+              if (thumbLastKey !== key) return;
+              seekDot.classList.remove('visible');
+              seekMarker?.classList.remove('visible');
+              thumbState = 'idle';
+            };
 
-              xhr.send();
-            }, 2000);
+            xhr.send();
           }, 500);
         }
       }
