@@ -1712,6 +1712,19 @@ export class CameraView {
           <span>00:00</span><span>04:00</span><span>08:00</span><span>12:00</span><span>16:00</span><span>20:00</span><span>24:00</span>
         </div>
         <div class="seek-time-tooltip"></div>
+        <div class="seek-thumb-dot">
+          <svg class="seek-thumb-ring" viewBox="0 0 20 20">
+            <circle cx="10" cy="10" r="8.5" class="seek-ring-bg"/>
+            <circle cx="10" cy="10" r="8.5" class="seek-ring-fill"/>
+          </svg>
+        </div>
+        <div class="seek-thumbnail">
+          <div class="seek-thumb-progress"></div>
+          <img alt="">
+          <div class="seek-thumb-spinner"><div></div></div>
+          <div class="seek-thumb-time"></div>
+        </div>
+        <div class="seek-thumb-marker"></div>
         <div class="seek-live-pill">▶ LIVE</div>
         </div>
       </div>
@@ -1950,8 +1963,54 @@ export class CameraView {
     // Seek timeline — click to seek
     const seekBar = this.el.querySelector('.seek-bar');
     const seekTooltip = this.el.querySelector('.seek-time-tooltip');
+    const seekDot = this.el.querySelector('.seek-thumb-dot');
+    const seekRingFill = this.el.querySelector('.seek-ring-fill');
+    const seekThumb = this.el.querySelector('.seek-thumbnail');
+    const seekThumbImg = seekThumb?.querySelector('img');
+    const seekThumbTime = seekThumb?.querySelector('.seek-thumb-time');
+    const seekThumbProgress = seekThumb?.querySelector('.seek-thumb-progress');
+    const seekThumbSpinner = seekThumb?.querySelector('.seek-thumb-spinner');
+    const seekMarker = this.el.querySelector('.seek-thumb-marker');
     const livePill = this.el.querySelector('.seek-live-pill');
     const cursorDetail = this.el.querySelector('.seek-cursor-detail');
+    let thumbDotTimer = null;
+    let thumbFetchTimer = null;
+    let thumbLastKey = '';
+    let thumbState = 'idle';     // idle → dot → loading → pinned
+    let thumbPinnedTime = null;  // { hours, minutes } of pinned thumbnail
+    let thumbPinnedPct = '';     // CSS left% of pinned position
+
+    const dismissThumb = () => {
+      seekDot?.classList.remove('visible');
+      seekThumb?.classList.remove('visible', 'pinned');
+      seekMarker?.classList.remove('visible');
+      clearTimeout(thumbDotTimer);
+      clearTimeout(thumbFetchTimer);
+      if (this._thumbXHR) { this._thumbXHR.abort(); this._thumbXHR = null; }
+      thumbLastKey = '';
+      thumbState = 'idle';
+      thumbPinnedTime = null;
+    };
+
+    // Click thumbnail → seek to that time
+    if (seekThumb) {
+      seekThumb.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (!thumbPinnedTime) return;
+        const baseDate = this._playbackDate || (() => { const d = new Date(); d.setHours(0,0,0,0); return d; })();
+        const seekDate = new Date(baseDate);
+        seekDate.setHours(thumbPinnedTime.hours, thumbPinnedTime.minutes, 0, 0);
+        dismissThumb();
+        if (this.isPlayback && this.onPlaybackSeek) {
+          this.onPlaybackSeek(this, seekDate);
+        } else if (this.onPlaybackRequest) {
+          const pad = (n) => String(n).padStart(2, '0');
+          const fmt = (d) => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+          const endOfDay = new Date(seekDate); endOfDay.setHours(23, 59, 59, 0);
+          this.onPlaybackRequest(this, fmt(seekDate), fmt(endOfDay), 'original');
+        }
+      });
+    }
 
     const getSeekTime = (e) => {
       const rect = seekBar.getBoundingClientRect();
@@ -2009,6 +2068,13 @@ export class CameraView {
       // Unavailable zone: show LIVE pill, hide green tooltip
       if (isUnavailable) {
         seekTooltip.classList.remove('visible');
+        if (thumbState !== 'pinned') {
+          seekDot?.classList.remove('visible');
+          seekThumb?.classList.remove('visible', 'pinned');
+          seekMarker?.classList.remove('visible');
+          clearTimeout(thumbDotTimer); clearTimeout(thumbFetchTimer);
+          thumbState = 'idle';
+        }
         livePill.style.left = `${fraction * 100}%`;
         livePill.classList.add('visible');
         return;
@@ -2018,13 +2084,143 @@ export class CameraView {
       seekTooltip.classList.remove('unavailable');
       seekTooltip.style.left = `${fraction * 100}%`;
       seekTooltip.classList.add('visible');
+
+      // Thumbnail preview: works on LIVE (past time = archive) and playback timeline
+      const thumbDate0 = this._playbackDate || (() => { const d = new Date(); d.setHours(0,0,0,0); return d; })();
+      if (seekDot && seekThumb && !isUnavailable) {
+        const pad2 = (n) => String(n).padStart(2, '0');
+        const key = `${this.id}_${pad2(hours)}${pad2(minutes)}`;
+        const pct = `${fraction * 100}%`;
+
+        // When pinned: thumbnail stays at fixed position, only dot/tooltip follow cursor
+        if (thumbState === 'pinned') {
+          seekDot.style.left = pct;
+          // Don't reset — thumb stays at thumbPinnedPct
+          return;
+        }
+
+        // Position follows cursor for non-pinned states
+        seekDot.style.left = pct;
+        // Clamp thumbnail so it doesn't overflow seekbar edges
+        const barW = seekBar.offsetWidth;
+        const thumbW = seekThumb.offsetWidth || 200;
+        const halfThumb = thumbW / 2;
+        const cursorPx = fraction * barW;
+        const clampedPx = Math.max(halfThumb, Math.min(barW - halfThumb, cursorPx));
+        seekThumb.style.left = `${clampedPx}px`;
+
+        if (key !== thumbLastKey) {
+          // New minute — reset cycle
+          thumbLastKey = key;
+          thumbState = 'idle';
+          seekDot.classList.remove('visible');
+          seekThumb.classList.remove('visible', 'pinned');
+          seekMarker?.classList.remove('visible');
+          if (seekRingFill) { seekRingFill.style.transition = 'none'; seekRingFill.style.strokeDashoffset = '53.4'; }
+          if (seekThumbProgress) { seekThumbProgress.style.transition = 'none'; seekThumbProgress.style.width = '0'; }
+          if (seekThumbSpinner) seekThumbSpinner.style.display = '';
+          if (seekThumbImg) seekThumbImg.style.opacity = '0';
+          clearTimeout(thumbDotTimer);
+          clearTimeout(thumbFetchTimer);
+          if (this._thumbXHR) { this._thumbXHR.abort(); this._thumbXHR = null; }
+
+          const thisHours = hours, thisMinutes = minutes;
+
+          // Stage 1: 500ms pause → show dot + ring (2s)
+          thumbDotTimer = setTimeout(() => {
+            if (thumbLastKey !== key) return;
+            thumbState = 'dot';
+            seekDot.classList.add('visible');
+            if (seekThumbTime) seekThumbTime.textContent = `${pad2(thisHours)}:${pad2(thisMinutes)}`;
+            requestAnimationFrame(() => {
+              if (seekRingFill) {
+                seekRingFill.style.transition = 'stroke-dashoffset 2s linear';
+                seekRingFill.style.strokeDashoffset = '0';
+              }
+            });
+
+            // Stage 2: ring done → show frame + fetch
+            thumbFetchTimer = setTimeout(() => {
+              if (thumbLastKey !== key || thumbState !== 'dot') return;
+              thumbState = 'loading';
+              seekDot.classList.remove('visible');
+              seekThumb.classList.add('visible');
+              if (seekThumbProgress) { seekThumbProgress.style.transition = 'none'; seekThumbProgress.style.width = '0'; }
+
+              // Show marker dot on timeline
+              if (seekMarker) {
+                seekMarker.style.left = pct;
+                seekMarker.classList.add('visible');
+              }
+
+              const thumbDate = new Date(thumbDate0);
+              thumbDate.setHours(thisHours, thisMinutes, 0, 0);
+              const iso = `${thumbDate.getFullYear()}-${pad2(thumbDate.getMonth()+1)}-${pad2(thumbDate.getDate())}T${pad2(thisHours)}:${pad2(thisMinutes)}:00`;
+
+              const xhr = new XMLHttpRequest();
+              this._thumbXHR = xhr;
+              xhr.open('GET', `/backend/playback-thumbnail/${this.id}?t=${iso}`);
+              xhr.responseType = 'blob';
+
+              xhr.onprogress = (evt) => {
+                if (thumbLastKey !== key || !seekThumbProgress) return;
+                if (evt.lengthComputable) {
+                  const p = Math.round((evt.loaded / evt.total) * 100);
+                  seekThumbProgress.style.transition = 'width 0.2s';
+                  seekThumbProgress.style.width = `${p}%`;
+                }
+              };
+
+              xhr.onload = () => {
+                this._thumbXHR = null;
+                if (thumbLastKey !== key || xhr.status !== 200) return;
+                thumbState = 'pinned';
+                thumbPinnedTime = { hours: thisHours, minutes: thisMinutes };
+                thumbPinnedPct = pct;
+                if (seekThumbProgress) { seekThumbProgress.style.transition = 'width 0.15s'; seekThumbProgress.style.width = '100%'; }
+                if (seekThumbSpinner) seekThumbSpinner.style.display = 'none';
+                seekThumb.classList.add('pinned');
+                const url = URL.createObjectURL(xhr.response);
+                if (seekThumbImg) {
+                  seekThumbImg.onload = () => URL.revokeObjectURL(url);
+                  seekThumbImg.src = url;
+                  seekThumbImg.style.opacity = '1';
+                }
+              };
+
+              xhr.onerror = () => {
+                this._thumbXHR = null;
+                if (thumbLastKey !== key) return;
+                seekThumb.classList.remove('visible');
+                seekMarker?.classList.remove('visible');
+                thumbState = 'idle';
+              };
+
+              xhr.send();
+            }, 2000);
+          }, 500);
+        }
+      }
     });
 
-    seekBar.addEventListener('mouseleave', () => {
+    seekBar.addEventListener('mouseleave', (e) => {
+      // Don't dismiss if mouse moved to the pinned thumbnail
+      if (thumbState === 'pinned' && seekThumb?.contains(e.relatedTarget)) return;
       seekTooltip.classList.remove('visible');
+      dismissThumb();
       livePill.classList.remove('visible');
       if (cursorDetail) cursorDetail.classList.remove('visible');
     });
+
+    // When mouse leaves thumbnail back to seekbar or away — dismiss
+    if (seekThumb) {
+      seekThumb.addEventListener('mouseleave', (e) => {
+        if (thumbState !== 'pinned') return;
+        // If going back to seekbar, let seekbar handle it — don't dismiss yet
+        if (seekBar.contains(e.relatedTarget)) return;
+        dismissThumb();
+      });
+    }
 
     seekBar.addEventListener('click', (e) => {
       e.stopPropagation();

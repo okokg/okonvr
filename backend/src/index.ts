@@ -18,6 +18,7 @@ import { transcodeRoutes } from './routes/transcode';
 import { healthRoutes } from './routes/health';
 import { statsRoutes } from './routes/stats';
 import { snapshotRoutes } from './routes/snapshots';
+import { playbackThumbnailRoutes } from './routes/playback-thumbnail';
 
 /** Run auto-discovery for a single NVR. Pure function — caller manages activities. */
 async function discoverNvr(nvr: NvrEntry): Promise<boolean> {
@@ -139,6 +140,7 @@ async function main() {
   await fastify.register(healthRoutes);
   await fastify.register(statsRoutes);
   await fastify.register(snapshotRoutes);
+  await fastify.register(playbackThumbnailRoutes);
 
   await fastify.listen({ port: config.server.port, host: '0.0.0.0' });
   console.log(`Backend listening on port ${config.server.port}`);
