@@ -20,7 +20,7 @@ export class HikvisionProvider implements NvrProvider {
   readonly type = 'hikvision';
   readonly rtspBase: string;
   readonly httpBase: string;
-  private auth: { username: string; password: string };
+  readonly auth: { username: string; password: string };
   private subSuffix: string;
   private mainSuffix: string;
 
@@ -44,6 +44,11 @@ export class HikvisionProvider implements NvrProvider {
   getProbeUrl(camera: CameraConfig): string {
     const track = this.channelToTrack(camera.channel, this.mainSuffix);
     return `${this.rtspBase}/Streaming/Channels/${track}`;
+  }
+
+  getSnapshotUrl(camera: CameraConfig): string {
+    const track = this.channelToTrack(camera.channel, this.mainSuffix);
+    return `${this.httpBase}/ISAPI/Streaming/channels/${track}/picture`;
   }
 
   getPlaybackUrl(camera: CameraConfig, start: Date, end: Date): string {

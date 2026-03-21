@@ -62,8 +62,11 @@ export interface NvrProvider {
   /** RTSP base URL: rtsp://user:pass@host:port */
   readonly rtspBase: string;
 
-  /** HTTP base URL for API: http://user:pass@host:http_port */
+  /** HTTP base URL for API: http://host:http_port */
   readonly httpBase: string;
+
+  /** Auth credentials for HTTP API. */
+  readonly auth: { username: string; password: string };
 
   /** Get live sub-stream URL for a camera. */
   getLiveUrl(camera: CameraConfig): string;
@@ -76,6 +79,9 @@ export interface NvrProvider {
 
   /** Format a Date for NVR playback query (vendor-specific). */
   formatTime(date: Date): string;
+
+  /** Get HTTP snapshot URL (JPEG) for a camera. */
+  getSnapshotUrl(camera: CameraConfig): string;
 
   buildPlaybackSource(options: PlaybackOptions): PlaybackResult;
 

@@ -5,7 +5,7 @@ import { CameraConfig } from '../providers/types';
 import { registry } from './camera-registry';
 import { ensureCameraRows } from '../db';
 import { generateGo2rtcConfig } from './go2rtc-config';
-import { setUiConfig } from './config-store';
+import { setUiConfig, setClientExtras } from './config-store';
 import { createStream, deleteStream, fetchStreams } from './stream-manager';
 
 let currentConfig: OkoConfig | null = null;
@@ -14,6 +14,7 @@ let reloadTimer: ReturnType<typeof setTimeout> | null = null;
 const CONFIG_PATHS = [
   process.env.OKO_CONFIG || '',
   '/config/oko.yaml',
+  '/config/oko.yml',
 ];
 
 /**
@@ -127,6 +128,7 @@ async function handleConfigChange() {
 
   currentConfig = newConfig;
   setUiConfig(newConfig.ui);
+  setClientExtras(newConfig.snapshots, newConfig.playback);
 
   const total = newConfig.nvrs.reduce((n, nvr) => n + nvr.cameras.length, 0);
   console.log(`[watcher] ✓ Reload complete: ${total} cameras active`);

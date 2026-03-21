@@ -16,7 +16,7 @@ import {
   TIMELINE_RENDER_INTERVAL_MS, SWIPE_THRESHOLD_PX,
 } from './config.js';
 
-(window._oko = window._oko || {}).grid = 'g3a4';
+(window._oko = window._oko || {}).grid = 'g3a5';
 
 export class CameraGrid {
   /**
@@ -613,14 +613,12 @@ export class CameraGrid {
     for (const cam of this.cameras) {
       const color = colorMap.get(cam.group);
       if (color) {
-        const nameWrap = cam.el.querySelector('.cam-name-wrap');
-        if (nameWrap) {
-          nameWrap.style.setProperty('--group-bg', color.base);
-          nameWrap.style.setProperty('--group-border', color.border);
-          nameWrap.style.setProperty('--group-text', color.bright);
-          nameWrap.style.setProperty('--group-sep', color.sep);
-          nameWrap.style.setProperty('--group-label', color.label);
-        }
+        // Set on cam element so variables cascade to both name-wrap and seek-info-name
+        cam.el.style.setProperty('--group-bg', color.base);
+        cam.el.style.setProperty('--group-border', color.border);
+        cam.el.style.setProperty('--group-text', color.bright);
+        cam.el.style.setProperty('--group-sep', color.sep);
+        cam.el.style.setProperty('--group-label', color.label);
       }
     }
 

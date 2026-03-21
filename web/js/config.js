@@ -21,6 +21,7 @@ export const BUFFER_SYNC_INTERVAL_MS = 2000;
 export const BUFFER_MAX_SECONDS = 10;       // max buffered duration before trimming
 export const BUFFER_TRIM_TO = 5;            // trim buffer to this duration
 export const MSE_OPEN_TIMEOUT_MS = 1000;    // delay before retrying MSE after ws close
+export const MSE_CACHE_TTL_MS = 60_000;     // remember MSE mode per camera — skip WebRTC on reconnect/seek
 
 // ── Bitrate / UI updates ──
 export const BITRATE_INTERVAL_MS = 10000;   // bitrate measurement interval

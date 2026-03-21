@@ -13,10 +13,10 @@ import {
   RETRY_BASE_MS, RETRY_MAX_MS, ICE_TIMEOUT_MS,
   ICE_GATHER_TIMEOUT_MS, STUN_SERVERS, BUFFER_MAX_SECONDS,
   BUFFER_TRIM_TO, WEBRTC_RETRY_MS, VIDEO_DECODE_CHECK_MS,
-  MSE_OPEN_TIMEOUT_MS, STALE_STREAM_MS,
+  MSE_OPEN_TIMEOUT_MS, STALE_STREAM_MS, MSE_CACHE_TTL_MS,
 } from './config.js';
 
-(window._oko = window._oko || {}).player = 'p4b5';
+(window._oko = window._oko || {}).player = 'p4b8';
 
 export class CamPlayer {
   /**
@@ -61,6 +61,28 @@ export class CamPlayer {
     return !CamPlayer.h265WebRTCSupported && !CamPlayer.h265MSESupported;
   }
 
+  /** MSE mode cache: cameraId → last MSE timestamp. Skip WebRTC if recent. */
+  static _mseCache = new Map();
+  static MSE_CACHE_TTL = MSE_CACHE_TTL_MS; // default from config.js, overridden by server config
+
+  /**
+   * Extract camera ID from any stream name:
+   *   'D28'              → 'D28'   (SD live)
+   *   'hd_D28'           → 'D28'   (HD)
+   *   '__pb_D28_17345...' → 'D28'   (playback)
+   */
+  static _getCameraId(streamName) {
+    if (streamName.startsWith('__pb_')) {
+      const rest = streamName.slice(5); // after '__pb_'
+      const lastUnderscore = rest.lastIndexOf('_');
+      return lastUnderscore > 0 ? rest.slice(0, lastUnderscore) : rest;
+    }
+    if (streamName.startsWith('hd_')) {
+      return streamName.slice(3);
+    }
+    return streamName;
+  }
+
   /** @param {HTMLVideoElement} video  @param {string} name - stream ID  @param {Object} [opts] */
   constructor(video, name, opts = {}) {
     this.video = video;
@@ -93,6 +115,10 @@ export class CamPlayer {
     this._prevBitrateTime = 0;
     this._lastBytesGrowth = 0;
 
+    // timing
+    this._connectStartTime = 0;
+    this._mseFirstData = false;
+
     // callbacks
     this.onStatusChange = null;  // (online: boolean) => void
     this.onAudioTrack = null;    // () => void
@@ -102,6 +128,11 @@ export class CamPlayer {
     this.onConnectionError = null; // (streamName: string) => void — NVR unreachable
   }
 
+  /** Elapsed ms since connect start, formatted. */
+  _elapsed() {
+    return this._connectStartTime ? ` +${Date.now() - this._connectStartTime}ms` : '';
+  }
+
   // ── Public API ──
 
   start() {
@@ -109,7 +140,16 @@ export class CamPlayer {
     if (this._codecMismatch) {
       this._connectMSE();
     } else {
-      this._connectWebRTC();
+      // Check MSE cache: if this camera used MSE within TTL, skip WebRTC
+      const camId = CamPlayer._getCameraId(this.name);
+      const lastMse = CamPlayer._mseCache.get(camId);
+      if (lastMse && (Date.now() - lastMse) < CamPlayer.MSE_CACHE_TTL) {
+        console.log(`[player] ${this.name}: MSE cache hit for ${camId} (${Math.round((Date.now() - lastMse) / 1000)}s ago), skipping WebRTC`);
+        this._codecMismatch = true;
+        this._connectMSE();
+      } else {
+        this._connectWebRTC();
+      }
     }
   }
 
@@ -203,6 +243,7 @@ export class CamPlayer {
     this.stop();
     if (!this.enabled) return;
 
+    this._connectStartTime = Date.now();
     console.log(`[player] ${this.name}: connecting WebRTC...`);
     this.mode = 'webrtc';
     this._emitMode('webrtc');
@@ -231,7 +272,7 @@ export class CamPlayer {
           this._emitStage('codec fallback');
 
           if (CamPlayer.h265MSESupported) {
-            console.log(`[player] ${this.name}: codec mismatch, switching to MSE`);
+            console.log(`[player] ${this.name}: codec mismatch, switching to MSE${this._elapsed()}`);
             this._connectMSE();
           } else if (this.onNeedTranscode) {
             console.log(`[player] ${this.name}: no H.265 support, requesting transcode`);
@@ -276,7 +317,7 @@ export class CamPlayer {
       // Debug: log negotiated codec from SDP answer
       const codecMatch = answerSdp.match(/a=rtpmap:\d+ (H26[45]|VP[89]|AV1)\//i);
       const negotiatedCodec = codecMatch ? codecMatch[1] : 'unknown';
-      console.log(`[player] ${this.name}: WebRTC answer codec=${negotiatedCodec}`);
+      console.log(`[player] ${this.name}: WebRTC answer codec=${negotiatedCodec}${this._elapsed()}`);
       this._emitStage(`codec ${negotiatedCodec}`);
 
       await this.pc.setRemoteDescription(
@@ -304,7 +345,7 @@ export class CamPlayer {
 
   _setupPeerConnectionHandlers() {
     this.pc.ontrack = (event) => {
-      console.log(`[player] ${this.name}: ontrack kind=${event.track.kind} readyState=${event.track.readyState}`);
+      console.log(`[player] ${this.name}: ontrack kind=${event.track.kind}${this._elapsed()}`);
 
       if (event.track.kind === 'audio' && this.onAudioTrack) {
         this.onAudioTrack();
@@ -326,7 +367,7 @@ export class CamPlayer {
         const checkDecode = () => {
           this._videoDecodeAttempts++;
           const w = this.video.videoWidth;
-          console.log(`[player] ${this.name}: decode check #${this._videoDecodeAttempts} videoWidth=${w} mode=${this.mode}`);
+          console.log(`[player] ${this.name}: decode check #${this._videoDecodeAttempts} videoWidth=${w} mode=${this.mode}${this._elapsed()}`);
 
           if (w > 0) {
             this._emitStage('playing');
@@ -342,7 +383,7 @@ export class CamPlayer {
           }
 
           // All attempts failed — codec truly unsupported
-          console.log(`[player] ${this.name}: WebRTC no decode after ${maxAttempts} checks — fallback`);
+          console.log(`[player] ${this.name}: WebRTC no decode after ${maxAttempts} checks — fallback${this._elapsed()}`);
           this._emitStage('codec fallback');
           this._codecMismatch = true;
           this._closePeerConnection();
@@ -362,7 +403,7 @@ export class CamPlayer {
     this.pc.oniceconnectionstatechange = () => {
       if (!this.pc) return;
       const state = this.pc.iceConnectionState;
-      console.log(`[player] ${this.name}: ICE state=${state}`);
+      console.log(`[player] ${this.name}: ICE state=${state}${this._elapsed()}`);
       if (state === 'failed') {
         this._connectMSE();
       } else if (state === 'disconnected' || state === 'closed') {
@@ -414,6 +455,8 @@ export class CamPlayer {
     this.stop();
     if (!this.enabled) return;
 
+    this._connectStartTime = Date.now();
+    this._mseFirstData = false;
     console.log(`[player] ${this.name}: connecting MSE...`);
     this.mode = 'mse';
     this._emitMode('mse');
@@ -428,7 +471,7 @@ export class CamPlayer {
       this.ws.binaryType = 'arraybuffer';
 
       this.ws.onopen = () => {
-        console.log(`[player] ${this.name}: WS open`);
+        console.log(`[player] ${this.name}: WS open${this._elapsed()}`);
         this._emitStage('mse buffering');
         this.ws.send(JSON.stringify({ type: 'mse', value: '' }));
       };
@@ -436,9 +479,16 @@ export class CamPlayer {
       this.ws.onmessage = (event) => {
         if (typeof event.data === 'string') {
           const msg = JSON.parse(event.data);
-          if (msg.type === 'mse') this._initMediaSource(msg.value);
+          if (msg.type === 'mse') {
+            console.log(`[player] ${this.name}: MSE codec="${msg.value}"${this._elapsed()}`);
+            this._initMediaSource(msg.value);
+          }
         } else {
           this._prevBytes += event.data.byteLength;
+          if (!this._mseFirstData) {
+            this._mseFirstData = true;
+            console.log(`[player] ${this.name}: MSE first data ${event.data.byteLength}b${this._elapsed()}`);
+          }
           this._appendToBuffer(new Uint8Array(event.data));
         }
       };
@@ -478,6 +528,7 @@ export class CamPlayer {
 
     this.mediaSource.addEventListener('sourceopen', () => {
       try {
+        console.log(`[player] ${this.name}: sourceopen${this._elapsed()}`);
         this.sourceBuffer = this.mediaSource.addSourceBuffer(mimeType);
         this.sourceBuffer.mode = 'segments';
 
@@ -505,7 +556,11 @@ export class CamPlayer {
       }
     }, { once: true });
 
-    this.video.play().catch(() => {});
+    this.video.play().then(() => {
+      console.log(`[player] ${this.name}: MSE video.play() ok${this._elapsed()}`);
+    }).catch((e) => {
+      console.warn(`[player] ${this.name}: MSE video.play() rejected: ${e.message}${this._elapsed()}`);
+    });
   }
 
   _appendToBuffer(data) {
@@ -529,6 +584,7 @@ export class CamPlayer {
     try {
       sb.appendBuffer(merged);
     } catch (err) {
+      console.warn(`[player] ${this.name}: appendBuffer error: ${err.message} (${merged.byteLength}b, queue=${this.bufferQueue.length})`);
       // quota exceeded — reconnect
       setTimeout(() => this._connectMSE(), MSE_OPEN_TIMEOUT_MS);
     }
@@ -576,6 +632,10 @@ export class CamPlayer {
       this.bitrate = Math.round((this._prevBytes * 8) / elapsed / 1000);
       this._prevBytes = 0;
       this._prevBitrateTime = now;
+    }
+    // Keep MSE cache fresh while actively receiving data
+    if (this.mode === 'mse') {
+      CamPlayer._mseCache.set(CamPlayer._getCameraId(this.name), now);
     }
   }
 
@@ -634,11 +694,14 @@ export class CamPlayer {
     if (online) {
       this._lastBytesGrowth = Date.now();
     }
-    console.log(`[player] ${this.name}: ${online ? 'CONNECTED' : 'DISCONNECTED'} (${this.mode})`);
+    console.log(`[player] ${this.name}: ${online ? 'CONNECTED' : 'DISCONNECTED'} (${this.mode})${this._elapsed()}`);
     if (this.onStatusChange) this.onStatusChange(online);
   }
 
   _emitMode(mode) {
+    if (mode === 'mse') {
+      CamPlayer._mseCache.set(CamPlayer._getCameraId(this.name), Date.now());
+    }
     if (this.onModeChange) this.onModeChange(mode);
   }
 

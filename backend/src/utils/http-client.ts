@@ -221,3 +221,48 @@ function parseChallenge(header: string): Record<string, string> {
 function md5(str: string): string {
   return crypto.createHash('md5').update(str).digest('hex');
 }
+
+/**
+ * HTTP GET returning binary Buffer. Uses same Digest/Basic auth as httpGet.
+ * Designed for snapshot fetches — minimal logging, fast.
+ */
+export async function httpGetBuffer(url: string, auth: AuthConfig, timeoutMs = 8000): Promise<Buffer | null> {
+  const parsedUrl = new URL(url);
+  const digestUri = parsedUrl.pathname + parsedUrl.search;
+
+  try {
+    // Step 1: probe for auth challenge
+    const res1 = await fetch(url, {
+      headers: { 'Accept': 'image/jpeg' },
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+
+    if (res1.ok) {
+      return Buffer.from(await res1.arrayBuffer());
+    }
+
+    if (res1.status !== 401) return null;
+    await res1.text(); // drain
+
+    const authHeader = res1.headers.get('www-authenticate');
+    if (!authHeader) return null;
+
+    // Step 2: authenticate
+    let authHeaderValue: string;
+    if (authHeader.toLowerCase().startsWith('digest')) {
+      authHeaderValue = buildDigestHeader(auth, 'GET', digestUri, authHeader);
+    } else {
+      authHeaderValue = `Basic ${Buffer.from(`${auth.username}:${auth.password}`).toString('base64')}`;
+    }
+
+    const res2 = await fetch(url, {
+      headers: { 'Authorization': authHeaderValue, 'Accept': 'image/jpeg' },
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+
+    if (!res2.ok) return null;
+    return Buffer.from(await res2.arrayBuffer());
+  } catch {
+    return null;
+  }
+}

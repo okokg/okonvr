@@ -11,10 +11,26 @@ go2rtc:
   webrtc_port: 8555
   # candidates are set via SERVER_IP in .env
 
-# FFmpeg settings for NVR archive playback
-ffmpeg:
-  timeout: 30
+# Playback settings (archive + stream behavior)
+playback:
+  timeout: 30                    # FFmpeg timeout for archive streams
   playback_input: "-fflags nobuffer -flags low_delay -buffer_size 1 -rtsp_transport tcp -timeout 30 -i {input}"
+  mse_cache_ttl: 60              # remember MSE mode per camera (seconds), skip WebRTC on reconnect
+  force_mse: true                # always use MSE for archive playback (more reliable for H.265)
+                                 #   true  = MSE for all archives (recommended, avoids keyframe delays)
+                                 #   false = try WebRTC first, fallback to MSE on failure
+
+# ── Snapshot preloading ──
+# Shows camera preview before video stream connects (faster page load)
+snapshots:
+  enabled: true                  # enable/disable snapshot preloading
+  source: auto                   # auto | native | go2rtc
+                                 #   auto   = try NVR HTTP API first, fallback to go2rtc
+                                 #   native = NVR HTTP API only (ISAPI/CGI, fast ~100ms)
+                                 #   go2rtc = go2rtc frame.jpeg only (slow ~1-2s, decodes keyframe)
+  interval: 30                   # refresh interval in seconds
+  delay: 200                     # delay between sequential camera fetches (ms)
+  timeout: 8000                  # per-snapshot fetch timeout (ms)
 
 # ── UI settings ──
 ui:

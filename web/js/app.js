@@ -17,7 +17,7 @@ import { CamPlayer } from './player.js';
 import { NotificationManager } from './notifications.js';
 import { SEARCH_DEBOUNCE_MS, VERSION } from './config.js';
 
-(window._oko = window._oko || {}).app = 'a6c1';
+(window._oko = window._oko || {}).app = 'a6c8';
 
 export class App {
   constructor() {
@@ -46,6 +46,10 @@ export class App {
     this._uiConfig = await this.api.getUiConfig().catch(() => null) || {};
     this._applyUiConfig();
 
+    // Log config from server
+    const sc = this._uiConfig;
+    console.log(`[config] title="${sc.title}" snapshots=${sc.snapshots_enabled !== false} mse_cache_ttl=${sc.mse_cache_ttl ?? 60}s force_mse=${sc.playback_force_mse !== false}`);
+
     this.notifications.requestPermission();
 
     // Detect H.265 support early (cached for lifetime)
@@ -67,6 +71,44 @@ export class App {
     await this.api.cleanupPlaybacks().catch(() => {});
 
     await this._loadCameras();
+
+    // Expose debug helpers to devtools: window._okoDebug.snapshots() / .mseCache()
+    window._okoDebug = {
+      snapshots: () => {
+        const cams = this.grid.cameras;
+        const rows = cams.map(c => {
+          const snap = c.el.querySelector('.cam-snapshot');
+          return {
+            id: c.id,
+            hasElement: !!snap,
+            loaded: snap?.classList.contains('loaded') ?? false,
+            hidden: snap?.style.display === 'none',
+            src: snap?.src?.replace(location.origin, '') || '—',
+            size: snap ? `${snap.naturalWidth}×${snap.naturalHeight}` : '—',
+          };
+        });
+        console.table(rows);
+        const active = rows.filter(r => r.hasElement && !r.hidden).length;
+        const loaded = rows.filter(r => r.loaded).length;
+        console.log(`[snapshot] ${active} active, ${loaded} faded (video playing), ${rows.length - active} disabled/hidden`);
+        return rows;
+      },
+      mseCache: () => {
+        const entries = Array.from(CamPlayer._mseCache.entries()).map(([id, ts]) => ({
+          camera: id,
+          age: `${Math.round((Date.now() - ts) / 1000)}s`,
+          expires: `${Math.max(0, Math.round((ts + CamPlayer.MSE_CACHE_TTL - Date.now()) / 1000))}s`,
+        }));
+        console.table(entries);
+        console.log(`[mse-cache] ${entries.length} entries, TTL=${CamPlayer.MSE_CACHE_TTL / 1000}s`);
+        return entries;
+      },
+      config: () => {
+        console.log('[config]', window.__okoConfig);
+        return window.__okoConfig;
+      },
+    };
+    console.log(`[app] Debug: window._okoDebug.snapshots() / .mseCache() / .config()`);
 
     // Sync camera list periodically (detects oko.yaml hot reload)
     const syncMs = this._uiConfig.sync_interval || 15000;
@@ -152,7 +194,15 @@ export class App {
     window.__okoConfig = {
       stagger_ms: c.stagger_ms || 500,
       bitrate_interval: c.bitrate_interval || 5000,
+      snapshots_enabled: c.snapshots_enabled !== false,
+      mse_cache_ttl: (c.mse_cache_ttl || 60) * 1000,
+      playback_force_mse: c.playback_force_mse !== false,
     };
+
+    // Apply MSE cache TTL from server config
+    if (c.mse_cache_ttl != null) {
+      CamPlayer.MSE_CACHE_TTL = c.mse_cache_ttl * 1000;
+    }
   }
 
   /** Sync UI config changes from hot reload (only updates what changed). */
@@ -165,11 +215,19 @@ export class App {
       document.title = newUi.title;
     }
 
+    // MSE cache TTL
+    if (newUi.mse_cache_ttl != null) {
+      CamPlayer.MSE_CACHE_TTL = newUi.mse_cache_ttl * 1000;
+    }
+
     // Update stored config
     this._uiConfig = newUi;
     window.__okoConfig = {
       stagger_ms: newUi.stagger_ms || 500,
       bitrate_interval: newUi.bitrate_interval || 5000,
+      snapshots_enabled: newUi.snapshots_enabled !== false,
+      mse_cache_ttl: (newUi.mse_cache_ttl || 60) * 1000,
+      playback_force_mse: newUi.playback_force_mse !== false,
     };
   }
 
@@ -208,11 +266,22 @@ export class App {
       if (btn) {
         const isOff = offlineNvrs.has(s.name);
         btn.classList.toggle('nvr-offline', isOff);
+        const dot = btn.querySelector('.nvr-dot');
+        const countEl = btn.querySelector('.nvr-count');
+        if (dot) dot.style.background = isOff ? 'var(--danger)' : '';
         if (isOff) {
           const source = backendOffline.has(s.name) ? 'health check' : 'stream errors';
           btn.title = `${s.name} — OFFLINE (${source})`;
+          if (countEl) {
+            const total = this.grid.cameras.filter(c => c.group === s.name).length;
+            countEl.textContent = `0/${total}`;
+          }
         } else {
           btn.title = `Show only ${s.name} cameras (click again to show all)`;
+          if (countEl) {
+            const online = this.grid.cameras.filter(c => c.group === s.name && c.isConnected).length;
+            countEl.textContent = String(online);
+          }
         }
       }
     }
@@ -411,6 +480,10 @@ export class App {
 
     this.grid.onLiveRequest = (cam) => {
       this._stopPlayback(cam);
+      // Investigation mode: sync LIVE to all selected
+      if (this.grid._investigationMode) {
+        this._syncLiveToSelected(cam);
+      }
     };
 
     this.grid.onPlaybackSeek = (cam, seekTime) => {
@@ -493,6 +566,21 @@ export class App {
       }
 
       this.grid._updateStats();
+    };
+
+    // Stream not found in go2rtc — debounced recovery
+    this._streamRecoveryTimer = null;
+    this._streamRecoveryPending = new Set();
+    this._streamRecoveryCooldown = 0; // timestamp of last recovery
+    this.grid.onStreamNotFound = (cam) => {
+      // Cooldown: ignore if recovery happened within last 30s
+      if (Date.now() - this._streamRecoveryCooldown < 30000) return;
+
+      this._streamRecoveryPending.add(cam.id);
+
+      // Debounce: wait 2s for all cameras to report, then recover once
+      if (this._streamRecoveryTimer) clearTimeout(this._streamRecoveryTimer);
+      this._streamRecoveryTimer = setTimeout(() => this._recoverStreams(), 2000);
     };
 
     // Archive pause: destroy stream, keep freeze frame
@@ -624,7 +712,8 @@ export class App {
       const btn = document.createElement('button');
       btn.className = 'ctrl-btn group-btn';
       btn.dataset.group = group;
-      btn.textContent = group;
+      const camCount = this.grid.cameras.filter(c => c.group === group).length;
+      btn.innerHTML = `<span class="nvr-dot"></span><span class="nvr-name">${group}</span><span class="nvr-count">${camCount}</span>`;
       btn.title = `Show only ${group} cameras (click again to show all)`;
 
       // Apply group color as button border
@@ -633,6 +722,7 @@ export class App {
         const color = colorMap.get(group);
         btn.style.border = `1px solid ${color.bright}`;
         btn.style.color = color.bright;
+        btn.querySelector('.nvr-dot').style.background = color.bright;
       }
 
       btn.addEventListener('click', () => {
@@ -983,7 +1073,43 @@ export class App {
     if (startBtn) startBtn.remove();
     const countEl = document.querySelector('.selection-badge .sel-count');
     if (countEl) countEl.textContent = `${this._selectedCams.size} synced`;
-    this._showHint(`Investigation: ${this._selectedCams.size} cameras`);
+
+    // Sync playback state from first selected camera to all others
+    const selected = this.grid.selectedCameras;
+    const leader = selected[0];
+    if (!leader) return;
+
+    if (leader.isPlayback) {
+      // Leader in archive → sync all others to same time
+      const pos = leader.playbackPosition;
+      if (pos) {
+        const resolution = leader.playbackResolution;
+        const pad = (n) => String(n).padStart(2, '0');
+        const fmt = (d) => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+        const endOfDay = new Date(pos);
+        endOfDay.setHours(23, 59, 59, 0);
+        for (const cam of selected) {
+          if (cam === leader) continue;
+          if (cam.isPlayback) {
+            // Already in archive → seek to leader's time
+            this._seekPlayback(cam, pos);
+          } else {
+            // In LIVE → start archive at leader's time
+            this._startPlayback(cam, fmt(pos), fmt(endOfDay), resolution);
+          }
+        }
+        this._showHint(`Investigation: ${selected.length} cameras synced to archive`);
+      }
+    } else {
+      // Leader in LIVE → stop archive on all others
+      for (const cam of selected) {
+        if (cam === leader) continue;
+        if (cam.isPlayback) {
+          this._stopPlayback(cam);
+        }
+      }
+      this._showHint(`Investigation: ${selected.length} cameras synced to LIVE`);
+    }
   }
 
   _stopInvestigation() {
@@ -1010,18 +1136,45 @@ export class App {
 
   _syncStartToSelected(sourceCam, start, end, resolution) {
     for (const cam of this.grid.selectedCameras) {
-      if (cam === sourceCam || cam.isPlayback) continue;
-      console.log(`[app] Sync start: ${cam.id}`);
-      this._startPlayback(cam, start, end, resolution);
+      if (cam === sourceCam) continue;
+      if (cam.isPlayback) {
+        // Already in archive → seek to new start time
+        console.log(`[app] Sync seek (was archive): ${cam.id}`);
+        this._seekPlayback(cam, new Date(start));
+      } else {
+        // In LIVE → start archive
+        console.log(`[app] Sync start: ${cam.id}`);
+        this._startPlayback(cam, start, end, resolution);
+      }
+    }
+  }
+
+  _syncLiveToSelected(sourceCam) {
+    for (const cam of this.grid.selectedCameras) {
+      if (cam === sourceCam) continue;
+      if (cam.isPlayback || cam._pausedPosition) {
+        console.log(`[app] Sync LIVE: ${cam.id}`);
+        this._stopPlayback(cam);
+      }
     }
   }
 
   _syncSeekToSelected(sourceCam, seekTime) {
     for (const cam of this.grid.selectedCameras) {
       if (cam === sourceCam) continue;
-      if (!cam.isPlayback && !cam._pausedPosition) continue;
-      console.log(`[app] Sync seek: ${cam.id}`);
-      this._seekPlayback(cam, seekTime);
+      if (cam.isPlayback || cam._pausedPosition) {
+        console.log(`[app] Sync seek: ${cam.id}`);
+        this._seekPlayback(cam, seekTime);
+      } else {
+        // Camera is in LIVE → start archive at seekTime
+        const pad = (n) => String(n).padStart(2, '0');
+        const fmt = (d) => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+        const endOfDay = new Date(seekTime);
+        endOfDay.setHours(23, 59, 59, 0);
+        const resolution = sourceCam.playbackResolution || 'original';
+        console.log(`[app] Sync start (was LIVE): ${cam.id}`);
+        this._startPlayback(cam, fmt(seekTime), fmt(endOfDay), resolution);
+      }
     }
   }
 
@@ -1058,6 +1211,39 @@ export class App {
       cam._pausedPosition = null;
       this._seekPlayback(cam, position);
     }
+  }
+
+  /** Recover lost go2rtc streams and restart affected cameras. */
+  async _recoverStreams() {
+    const pending = this._streamRecoveryPending;
+    this._streamRecoveryPending = new Set();
+    this._streamRecoveryTimer = null;
+
+    // Set cooldown immediately to block re-entry
+    this._streamRecoveryCooldown = Date.now();
+
+    console.log(`[recovery] ${pending.size} cameras lost streams, triggering go2rtc recovery (cooldown 30s)...`);
+
+    try {
+      const result = await this.api.recoverStreams();
+      console.log(`[recovery] Backend re-registered ${result.cameras} streams`);
+    } catch (e) {
+      console.warn(`[recovery] Backend recovery failed: ${e.message}`);
+      return; // don't restart cameras if backend failed
+    }
+
+    // Wait for go2rtc to connect to NVR, then restart affected cameras
+    await new Promise(r => setTimeout(r, 3000));
+
+    let restarted = 0;
+    for (const cam of this.grid.cameras) {
+      if (pending.has(cam.id) && !cam.isPlayback) {
+        cam.player.start();
+        restarted++;
+        await new Promise(r => setTimeout(r, 200));
+      }
+    }
+    console.log(`[recovery] Restarted ${restarted} cameras (next recovery available in ${Math.round((30000 - (Date.now() - this._streamRecoveryCooldown)) / 1000)}s)`);
   }
 
   /** Cleanup all playback streams on page unload. */

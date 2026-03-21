@@ -16,6 +16,21 @@ export interface UiConfig {
   nvr_health_failures: number;
 }
 
+export interface SnapshotsConfig {
+  enabled: boolean;
+  interval: number;           // refresh interval in seconds
+  source: 'native' | 'go2rtc' | 'auto';  // native=NVR HTTP API, go2rtc=frame.jpeg, auto=try native then go2rtc
+  delay: number;              // delay between sequential fetches in ms
+  timeout: number;            // per-snapshot timeout in ms
+}
+
+export interface PlaybackConfig {
+  timeout: number;
+  playback_input: string;
+  mse_cache_ttl: number;      // MSE mode cache TTL in seconds (client-side)
+  force_mse: boolean;         // always use MSE for archive playback (more reliable for H.265)
+}
+
 export interface OkoConfig {
   server: {
     port: number;
@@ -27,18 +42,19 @@ export interface OkoConfig {
     candidates: string[];
   };
   nvrs: NvrEntry[];
-  ffmpeg: {
-    timeout: number;
-    playback_input: string;
-  };
+  playback: PlaybackConfig;
+  snapshots: SnapshotsConfig;
   ui: UiConfig;
 }
 
 const CONFIG_PATHS = [
   process.env.OKO_CONFIG || '',
   '/config/oko.yaml',
+  '/config/oko.yml',
   path.join(process.cwd(), 'oko.yaml'),
+  path.join(process.cwd(), 'oko.yml'),
   '/data/oko.yaml',
+  '/data/oko.yml',
 ];
 
 export function loadConfig(): OkoConfig {
@@ -102,10 +118,19 @@ function normalizeConfig(yaml: any): OkoConfig {
         : (serverIps.length ? serverIps.map((ip: string) => `${ip}:${webrtcPort}`) : []),
     },
     nvrs,
-    ffmpeg: {
-      timeout: yaml.ffmpeg?.timeout || 30,
-      playback_input: yaml.ffmpeg?.playback_input ||
+    playback: {
+      timeout: yaml.playback?.timeout || yaml.ffmpeg?.timeout || 30,
+      playback_input: yaml.playback?.playback_input || yaml.ffmpeg?.playback_input ||
         '-fflags nobuffer -flags low_delay -buffer_size 1 -rtsp_transport tcp -timeout 30 -i {input}',
+      mse_cache_ttl: yaml.playback?.mse_cache_ttl ?? yaml.ffmpeg?.mse_cache_ttl ?? 60,
+      force_mse: yaml.playback?.force_mse ?? true,
+    },
+    snapshots: {
+      enabled: yaml.snapshots?.enabled ?? true,
+      interval: yaml.snapshots?.interval ?? 30,
+      source: yaml.snapshots?.source ?? 'auto',
+      delay: yaml.snapshots?.delay ?? 200,
+      timeout: yaml.snapshots?.timeout ?? 8000,
     },
     ui: {
       title: yaml.ui?.title ?? 'OKO NVR',

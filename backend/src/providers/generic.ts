@@ -11,10 +11,12 @@ export class GenericProvider implements NvrProvider {
   readonly type = 'generic';
   readonly rtspBase: string;
   readonly httpBase: string;
+  readonly auth: { username: string; password: string };
 
   constructor(config: NvrConfig) {
     this.rtspBase = `rtsp://${config.username}:${config.password}@${config.host}:${config.port}`;
     this.httpBase = `http://${config.host}:${config.http_port || 80}`;
+    this.auth = { username: config.username, password: config.password };
   }
 
   getLiveUrl(camera: CameraConfig): string {
@@ -36,6 +38,10 @@ export class GenericProvider implements NvrProvider {
   /** ISO 8601 format by default */
   formatTime(date: Date): string {
     return date.toISOString();
+  }
+
+  getSnapshotUrl(camera: CameraConfig): string {
+    return ''; // no native snapshot — snapshot-cache will fallback to go2rtc
   }
 
   buildPlaybackSource(options: PlaybackOptions): PlaybackResult {

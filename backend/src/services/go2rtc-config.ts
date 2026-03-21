@@ -24,8 +24,8 @@ export function generateGo2rtcConfig(config: OkoConfig): void {
       ice_servers: [],
     },
     ffmpeg: {
-      timeout: config.ffmpeg.timeout,
-      playback: config.ffmpeg.playback_input,
+      timeout: config.playback.timeout,
+      playback: config.playback.playback_input,
     },
     streams,
   };

@@ -74,7 +74,7 @@ body {
 .stats .online { color: var(--accent); font-weight: 700; }
 .stats .offline { color: var(--danger); font-weight: 700; }
 .stats .sep { margin: 0 4px; }
-.stats .bandwidth { color: var(--text-dim); font-weight: 400; }
+.stats .bandwidth { color: var(--text-dim); font-weight: 400; white-space: nowrap; }
 .stats .h265-badge { color: var(--accent); font-weight: 700; font-size: 10px; }
 
 .clock { font-family: var(--mono); font-size: 11px; color: var(--text-dim); }
@@ -288,6 +288,19 @@ body {
   pointer-events: none;
 }
 .cam-freeze.visible { display: block; }
+
+/* Snapshot preload overlay */
+.cam-snapshot {
+  position: absolute;
+  top: 0; left: 0;
+  width: 100%; height: 100%;
+  object-fit: fill;
+  z-index: 1;
+  pointer-events: none;
+  transition: opacity 0.5s ease;
+}
+.cam-snapshot.loaded { opacity: 0; }
+.cam-snapshot[src=""], .cam-snapshot:not([src]) { display: none; }
 
 
 /* ── Camera Overlay (bottom bar) ── */
@@ -629,11 +642,13 @@ body {
 .cam-playback-panel.open { display: flex; }
 
 .cam.fullscreen .cam-playback-panel {
-  top: 42px;
-  right: 10px;
+  top: auto;
+  right: auto;
+  bottom: 80px;
+  left: 70px;
   padding: 14px;
-  background: rgba(0, 0, 0, 0.85);
-  border: 1px solid var(--border);
+  background: rgba(0, 0, 0, 0.92);
+  border: 1px solid rgba(255, 171, 0, 0.2);
   backdrop-filter: blur(12px);
 }
 
@@ -753,11 +768,36 @@ body {
 .cam.nvr-offline.fullscreen { opacity: 1; background: #000; }
 .cam.nvr-offline .cam-loading-text { color: var(--danger); }
 .cam.nvr-offline .cam-spinner circle:last-child { stroke: var(--danger); }
+.cam.nvr-offline .cam-loading-dots { display: none; }
+.cam.nvr-offline .cam-badges { display: none; }
+.cam.nvr-offline .cam-top-right { display: none; }
+.cam.nvr-offline .cam-info-tooltip { display: none; }
+.cam.nvr-offline .cam-timeline { display: none; }
+.cam.nvr-offline .cam-seek-timeline { display: none; }
+
+.group-btn { display: inline-flex; align-items: center; gap: 5px; }
+
+.nvr-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  transition: background 0.3s;
+}
+
+.nvr-name { white-space: nowrap; }
+
+.nvr-count {
+  font-size: 9px;
+  opacity: 0.6;
+}
 
 .group-btn.nvr-offline {
-  opacity: 0.5;
-  text-decoration: line-through;
+  opacity: 0.7;
 }
+.group-btn.nvr-offline .nvr-dot { background: var(--danger) !important; }
+.group-btn.nvr-offline .nvr-name { text-decoration: line-through; opacity: 0.6; }
+.group-btn.nvr-offline .nvr-count { color: var(--danger); opacity: 0.8; }
 
 /* ── Pause indicator ── */
 
@@ -789,18 +829,93 @@ body {
   left: 8px;
   right: 8px;
   display: none;
-  flex-direction: column;
-  gap: 2px;
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 6px;
   pointer-events: auto;
   z-index: 5;
 }
 
 .cam-seek-timeline.active { display: flex; }
 
-.cam.fullscreen .cam-seek-timeline {
-  bottom: 32px;
-  left: 16px;
-  right: 16px;
+/* Old fullscreen seek-timeline positioning removed — handled by HUD section */
+
+.seek-date-nav {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  flex-shrink: 0;
+}
+
+.seek-date-label {
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 700;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.85);
+  border: none;
+  padding: 3px 8px;
+  border-radius: 5px;
+  white-space: nowrap;
+  text-align: center;
+  line-height: 1.2;
+  position: relative;
+}
+
+.seek-date-label::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  border-radius: 0 0 5px 5px;
+  background: var(--warn);
+}
+
+.seek-date-label.is-today { color: var(--accent); }
+.seek-date-label.is-today::after { background: var(--accent); }
+
+.seek-date-weekday {
+  font-size: 8px;
+  font-weight: 400;
+  opacity: 0.5;
+  margin-right: 2px;
+}
+
+.seek-date-label.is-today .seek-date-weekday { opacity: 0.6; }
+
+.cam.fullscreen .seek-date-label { font-size: 12px; padding: 4px 10px; }
+.cam.fullscreen .seek-date-weekday { font-size: 9px; }
+
+.seek-day-btn {
+  background: rgba(0, 0, 0, 0.85);
+  border: 1px solid rgba(0, 212, 170, 0.5);
+  color: var(--accent);
+  font-size: 11px;
+  width: 20px;
+  height: 20px;
+  border-radius: 5px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  transition: all 0.15s;
+}
+
+.seek-day-btn:hover { background: rgba(0, 212, 170, 0.25); border-color: var(--accent); }
+.seek-day-btn.disabled { opacity: 0.2; pointer-events: none; }
+.cam.fullscreen .seek-day-btn { width: 24px; height: 24px; font-size: 13px; }
+
+.seek-bar-wrap {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  position: relative;
+  margin-top: 3px;
 }
 
 .seek-bar {
@@ -897,13 +1012,14 @@ body {
   position: absolute;
   top: -22px;
   transform: translateX(-50%);
-  background: rgba(29, 158, 117, 0.15);
-  border: 1px solid rgba(29, 158, 117, 0.5);
-  color: #5DCAA5;
+  background: var(--accent);
+  border: none;
+  color: #000;
   font-family: var(--mono);
-  font-size: 10px;
-  padding: 1px 6px;
-  border-radius: 3px;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 4px;
   pointer-events: none;
   opacity: 0;
   transition: opacity 0.15s;
@@ -911,9 +1027,50 @@ body {
 }
 
 .seek-time-tooltip.visible { opacity: 1; }
-.seek-time-tooltip.unavailable { color: rgba(255, 255, 255, 0.3); }
+.seek-time-tooltip.unavailable { background: rgba(255, 255, 255, 0.15); color: rgba(255, 255, 255, 0.3); }
+.seek-time-tooltip.merged { background: rgba(0, 0, 0, 0.9); }
+.seek-merge-target { color: var(--accent); font-weight: 700; }
+.seek-merge-arrow { color: rgba(255, 255, 255, 0.3); font-size: 0.85em; }
+.seek-merge-current { color: var(--warn); font-weight: 400; }
 
 .cam.fullscreen .seek-time-tooltip { font-size: 13px; padding: 4px 10px; top: -28px; }
+
+/* ── LIVE pill — separate element, does not touch seek-time-tooltip ── */
+.seek-live-pill {
+  position: absolute;
+  top: -16px;
+  transform: translateX(-50%);
+  background: rgba(0, 212, 170, 0.15);
+  color: rgba(0, 212, 170, 0.7);
+  font-family: var(--mono);
+  font-size: 8px;
+  font-weight: 700;
+  padding: 1px 8px;
+  border-radius: 4px;
+  border: 0.5px solid rgba(0, 212, 170, 0.25);
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.15s;
+  white-space: nowrap;
+  z-index: 2;
+}
+
+.seek-live-pill.visible { opacity: 1; }
+
+@keyframes live-hint-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
+.seek-live-pill-dot {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--accent);
+  display: inline-block;
+  opacity: 0.7;
+  animation: live-hint-pulse 1.2s ease-in-out infinite;
+}
 
 /* Unavailable zone (future, today only) */
 .seek-unavailable {
@@ -922,15 +1079,16 @@ body {
   top: 0;
   bottom: 0;
   border-radius: 0 6px 6px 0;
-  background: repeating-linear-gradient(
-    135deg,
-    rgba(255, 255, 255, 0.03),
-    rgba(255, 255, 255, 0.03) 2px,
-    transparent 2px,
-    transparent 6px
-  );
+  background:
+    repeating-linear-gradient(
+      135deg,
+      rgba(255, 71, 87, 0.1),
+      rgba(255, 71, 87, 0.1) 2px,
+      transparent 2px,
+      transparent 6px
+    ),
+    rgba(255, 71, 87, 0.12);
   pointer-events: none;
-  cursor: not-allowed;
 }
 
 /* Now marker (green vertical line) */
@@ -962,6 +1120,700 @@ body {
 .cam.fullscreen .seek-now-label { font-size: 10px; top: -20px; padding: 1px 6px; }
 
 
+/* ── Grid HUD (playback in grid mode — separate from seek-timeline) ── */
+
+.cam-grid-hud {
+  display: none;
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 6;
+  flex-direction: column;
+  pointer-events: auto;
+}
+
+/* Show grid HUD only in grid playback (not fullscreen) */
+/* Show grid HUD always in grid view (not fullscreen) */
+.cam:not(.fullscreen) .cam-grid-hud { display: flex; }
+
+/* Hide clutter in grid view (grid HUD replaces overlay) */
+.cam:not(.fullscreen) .cam-seek-timeline { display: none !important; }
+.cam:not(.fullscreen) .cam-overlay { display: none !important; }
+.cam:not(.fullscreen) .cam-top-right { display: none !important; }
+.cam:not(.fullscreen) .cam-info-tooltip { display: none !important; }
+
+/* Fullscreen: hide grid HUD, show seek-timeline */
+.cam.fullscreen .cam-grid-hud { display: none !important; }
+
+/* ── Grid HUD: LIVE button ── */
+
+.ghud-live-btn {
+  display: none;
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  z-index: 8;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  background: rgba(0, 0, 0, 0.6);
+  border: 0.5px solid rgba(0, 212, 170, 0.3);
+  border-radius: 4px;
+  color: rgba(0, 212, 170, 0.7);
+  font-family: var(--mono);
+  font-size: 8px;
+  font-weight: 700;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s;
+  overflow: hidden;
+}
+
+/* Show only in grid playback on hover */
+.cam.playback-mode:not(.fullscreen):hover .ghud-live-btn,
+.cam.playback-mode:not(.fullscreen).cam-selected .ghud-live-btn {
+  display: flex;
+  opacity: 1;
+}
+
+.ghud-live-btn:hover {
+  background: rgba(0, 212, 170, 0.2);
+  border-color: var(--accent);
+  color: #00d4aa;
+}
+
+/* Progress bar — fills during long-press */
+.ghud-live-progress {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  height: 2px;
+  width: 0;
+  background: var(--accent);
+  border-radius: 0 0 4px 4px;
+}
+
+@keyframes ghud-live-fill {
+  from { width: 0; }
+  to { width: 100%; }
+}
+
+.ghud-live-btn.pressing .ghud-live-progress {
+  animation: ghud-live-fill 0.5s linear forwards;
+}
+
+.ghud-live-btn.triggered {
+  background: rgba(0, 212, 170, 0.25);
+  border-color: var(--accent);
+}
+
+/* ── Grid HUD: info row ── */
+
+/* Info row: always in flow, transparent idle, solid hover */
+.ghud-info {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 6px;
+  background: transparent;
+  font-family: var(--mono);
+  font-size: 8px;
+  position: relative;
+  z-index: 2;
+  transition: background 0.15s;
+}
+
+/* Idle capsule behind name+dot */
+.ghud-info::before {
+  content: '';
+  position: absolute;
+  left: 2px;
+  top: 1px;
+  bottom: 1px;
+  width: 42px;
+  background: rgba(0, 0, 0, 0.7);
+  border-radius: 8px;
+  z-index: -1;
+  transition: opacity 0.15s;
+}
+
+.cam:hover .ghud-info,
+.cam.cam-selected .ghud-info {
+  background: #0a0a0c;
+}
+
+.cam:hover .ghud-info::before,
+.cam.cam-selected .ghud-info::before {
+  opacity: 0;
+}
+
+/* Hide details in idle via visibility (keeps layout stable) */
+.cam-grid-hud .ghud-rec-label,
+.cam-grid-hud .ghud-time,
+.cam-grid-hud .ghud-spacer,
+.cam-grid-hud .ghud-day-prev,
+.cam-grid-hud .ghud-day-next,
+.cam-grid-hud .ghud-date {
+  visibility: hidden;
+}
+
+.cam:hover .cam-grid-hud .ghud-rec-label,
+.cam:hover .cam-grid-hud .ghud-time,
+.cam:hover .cam-grid-hud .ghud-spacer,
+.cam:hover .cam-grid-hud .ghud-day-prev,
+.cam:hover .cam-grid-hud .ghud-day-next,
+.cam:hover .cam-grid-hud .ghud-date,
+.cam.cam-selected .cam-grid-hud .ghud-rec-label,
+.cam.cam-selected .cam-grid-hud .ghud-time,
+.cam.cam-selected .cam-grid-hud .ghud-spacer,
+.cam.cam-selected .cam-grid-hud .ghud-day-prev,
+.cam.cam-selected .cam-grid-hud .ghud-day-next,
+.cam.cam-selected .cam-grid-hud .ghud-date {
+  visibility: visible;
+}
+
+.ghud-name {
+  font-weight: 700;
+  font-size: 8px;
+  color: var(--group-text, #fff);
+  background: var(--group-bg, rgba(0, 0, 0, 0.5));
+  border: 1px solid var(--group-border, rgba(255, 255, 255, 0.15));
+  padding: 0 4px;
+  border-radius: 2px;
+  white-space: nowrap;
+}
+
+.ghud-status {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  white-space: nowrap;
+}
+
+@keyframes ghud-rec-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+.ghud-rec-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--warn);
+  display: inline-block;
+  flex-shrink: 0;
+  animation: ghud-rec-pulse 1.5s ease-in-out infinite;
+}
+
+.ghud-rec-label {
+  color: var(--warn);
+  font-weight: 700;
+  font-size: 7px;
+}
+
+.ghud-time {
+  color: rgba(255, 255, 255, 0.85);
+  font-weight: 500;
+  font-size: 8px;
+}
+
+.ghud-spacer { flex: 1; }
+
+/* ── Grid HUD: date nav ── */
+
+.ghud-date {
+  font-size: 8px;
+  font-weight: 700;
+  color: #fff;
+  white-space: nowrap;
+}
+
+.ghud-date.is-today { color: var(--accent); }
+
+.ghud-day-prev,
+.ghud-day-next {
+  background: none;
+  border: 1px solid rgba(0, 212, 170, 0.5);
+  color: var(--accent);
+  font-size: 8px;
+  width: 14px;
+  height: 14px;
+  border-radius: 2px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  transition: all 0.15s;
+}
+
+.ghud-day-prev:hover,
+.ghud-day-next:hover { background: rgba(0, 212, 170, 0.2); }
+.ghud-day-next.disabled { opacity: 0.2; pointer-events: none; }
+
+/* ── Grid HUD: progress bar ── */
+
+.ghud-bar {
+  position: relative;
+  height: 10px;
+  background: #1a1a1e;
+  cursor: crosshair;
+}
+
+.ghud-bar::before {
+  content: '';
+  position: absolute;
+  top: -14px;
+  left: 0;
+  right: 0;
+  bottom: 0;
+}
+
+.ghud-fill {
+  position: absolute;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  background: var(--warn);
+  opacity: 0.7;
+  pointer-events: none;
+}
+
+.ghud-cursor {
+  position: absolute;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 10px;
+  height: 10px;
+  background: var(--warn);
+  border: 2px solid #fff;
+  border-radius: 50%;
+  box-shadow: 0 0 6px rgba(255, 171, 0, 0.5);
+  pointer-events: none;
+  z-index: 2;
+}
+
+/* ── Grid HUD: hover tooltip ── */
+
+.ghud-tooltip {
+  position: absolute;
+  bottom: 34px;
+  transform: translateX(-50%);
+  background: var(--accent);
+  color: #000;
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 4px;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.15s;
+  white-space: nowrap;
+  z-index: 4;
+}
+
+.ghud-tooltip.visible { opacity: 1; }
+.ghud-tooltip.unavailable { background: rgba(255, 255, 255, 0.15); color: rgba(255, 255, 255, 0.3); }
+.ghud-tooltip.live {
+  background: rgba(0, 212, 170, 0.15);
+  color: rgba(0, 212, 170, 0.7);
+  border: 0.5px solid rgba(0, 212, 170, 0.25);
+  font-size: 8px;
+  padding: 1px 8px;
+  border-radius: 4px;
+}
+
+.ghud-tooltip-live-dot {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--accent);
+  display: inline-block;
+  opacity: 0.7;
+  animation: live-hint-pulse 1.2s ease-in-out infinite;
+}
+
+/* ── Grid HUD: unavailable zone (future hours, today only) ── */
+
+.ghud-unavailable {
+  display: none;
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background:
+    repeating-linear-gradient(
+      135deg,
+      rgba(255, 71, 87, 0.1),
+      rgba(255, 71, 87, 0.1) 2px,
+      transparent 2px,
+      transparent 6px
+    ),
+    rgba(255, 71, 87, 0.12);
+  pointer-events: none;
+  z-index: 1;
+}
+
+.ghud-now {
+  display: none;
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: var(--accent);
+  pointer-events: none;
+  z-index: 3;
+  transform: translateX(-1px);
+}
+
+/* ── Grid HUD: paused state ── */
+
+.cam.paused .ghud-fill { opacity: 0.2; }
+.cam.paused .ghud-cursor { opacity: 0.4; box-shadow: none; }
+.cam.paused .ghud-rec-dot { animation: none; opacity: 0.3; }
+.cam.paused .ghud-rec-label { display: none; }
+.cam.paused .ghud-status::after {
+  content: 'PAUSED';
+  color: rgba(255, 255, 255, 0.4);
+  font-size: 8px;
+}
+
+/* ── Grid HUD: LIVE state ── */
+
+.cam:not(.playback-mode) .ghud-fill { background: var(--accent); opacity: 0.3; }
+.cam:not(.playback-mode) .ghud-cursor { background: var(--accent); border-color: #fff; box-shadow: 0 0 4px rgba(0, 212, 170, 0.5); }
+.cam:not(.playback-mode) .ghud-rec-dot { background: var(--accent); }
+.cam:not(.playback-mode) .ghud-rec-label { color: var(--accent); }
+.cam:not(.playback-mode) .ghud-unavailable { display: none !important; }
+.cam:not(.playback-mode) .ghud-now { display: none !important; }
+
+/* LIVE: hide bar + date nav by default */
+.cam:not(.playback-mode) .ghud-bar { opacity: 0; max-height: 0; overflow: hidden; transition: opacity 0.2s, max-height 0.2s; }
+.cam:not(.playback-mode):hover .ghud-bar,
+.cam:not(.playback-mode).cam-selected .ghud-bar { opacity: 1; max-height: 20px; }
+
+.cam:not(.playback-mode) .cam-grid-hud .ghud-day-prev,
+.cam:not(.playback-mode) .cam-grid-hud .ghud-day-next,
+.cam:not(.playback-mode) .cam-grid-hud .ghud-date {
+  display: none !important;
+}
+
+/* ── Fullscreen HUD: info row ── */
+
+.seek-info-row { display: none; }
+.seek-info-spacer { flex: 1; }
+
+.cam.fullscreen .seek-info-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 16px;
+  background: rgba(0, 0, 0, 0.7);
+  font-family: var(--mono);
+  pointer-events: auto;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.cam.fullscreen .seek-info-name {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--group-text, #fff);
+  background: var(--group-bg, rgba(0, 0, 0, 0.5));
+  border: 1px solid var(--group-border, rgba(255, 255, 255, 0.15));
+  padding: 2px 8px;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+
+/* REC/LIVE status */
+.cam.fullscreen .seek-info-status {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+@keyframes rec-ring-pulse {
+  0%, 100% { border-color: rgba(255, 71, 87, 0.5); }
+  50% { border-color: rgba(255, 71, 87, 0.15); }
+}
+
+@keyframes rec-inner-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
+.cam.fullscreen .seek-info-rec-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 1.5px solid rgba(255, 71, 87, 0.5);
+  background: none;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: rec-ring-pulse 1.5s ease-in-out infinite;
+}
+
+.seek-info-rec-inner {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--warn);
+  display: block;
+  animation: rec-inner-pulse 1.5s ease-in-out infinite;
+}
+
+.cam.fullscreen .seek-info-rec-text {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--warn);
+}
+
+/* LIVE mode: green accents */
+@keyframes live-dot-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+.cam.fullscreen.fs-live .seek-info-rec-dot {
+  border-color: rgba(0, 212, 170, 0.5);
+  animation: live-dot-pulse 1.5s ease-in-out infinite;
+}
+.cam.fullscreen.fs-live .seek-info-rec-inner { background: var(--accent); }
+.cam.fullscreen.fs-live .seek-info-rec-text { color: var(--accent); }
+
+/* Time button — clickable, opens panel */
+.seek-info-time-btn {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  background: rgba(255, 171, 0, 0.06);
+  border: 1px solid rgba(255, 171, 0, 0.25);
+  border-radius: 5px;
+  padding: 2px 8px;
+  cursor: pointer;
+  transition: all 0.15s;
+  font-family: var(--mono);
+}
+
+.seek-info-time-btn:hover {
+  background: rgba(255, 171, 0, 0.12);
+  border-color: rgba(255, 171, 0, 0.5);
+}
+
+.cam.fullscreen.fs-live .seek-info-time-btn {
+  background: rgba(0, 212, 170, 0.06);
+  border-color: rgba(0, 212, 170, 0.25);
+}
+.cam.fullscreen.fs-live .seek-info-time-btn:hover {
+  background: rgba(0, 212, 170, 0.12);
+  border-color: rgba(0, 212, 170, 0.5);
+}
+
+.seek-info-time {
+  font-size: 14px;
+  font-weight: 500;
+  color: #fff;
+}
+
+.seek-info-time-arrow {
+  font-size: 9px;
+  color: rgba(255, 171, 0, 0.5);
+}
+.cam.fullscreen.fs-live .seek-info-time-arrow { color: rgba(0, 212, 170, 0.5); }
+
+.seek-info-date-full {
+  font-size: 10px;
+  color: rgba(255, 255, 255, 0.3);
+  white-space: nowrap;
+}
+
+/* Fullscreen seek buttons */
+.seek-info-seek-btns {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.fs-seek-btn {
+  background: none;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: rgba(255, 255, 255, 0.45);
+  font-family: var(--mono);
+  font-size: 10px;
+  padding: 3px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+
+.fs-seek-btn:hover {
+  border-color: var(--warn);
+  color: var(--warn);
+}
+
+.fs-seek-more {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.3);
+  font-family: var(--mono);
+  font-size: 12px;
+  width: 24px;
+  padding: 3px 0;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.15s;
+  text-align: center;
+}
+
+.fs-seek-more:hover {
+  border-color: rgba(255, 255, 255, 0.3);
+  color: rgba(255, 255, 255, 0.6);
+}
+
+.fs-seek-extra {
+  display: none;
+  gap: 4px;
+}
+
+.fs-seek-extra.open {
+  display: flex;
+}
+
+/* LIVE: hide forward seek buttons */
+.cam.fullscreen.fs-live .fs-seek-fwd { display: none; }
+
+/* Fullscreen: unified top bar */
+.cam.fullscreen .cam-overlay {
+  display: flex !important;
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: auto;
+  padding: 6px 16px;
+  background: rgba(0, 0, 0, 0.6);
+  align-items: center;
+  z-index: 10;
+}
+.cam.fullscreen .cam-name { font-size: 11px; }
+.cam.fullscreen .cam-label { font-size: 9px; }
+.cam.fullscreen .cam-badges { display: none; }
+
+/* Info inline: codec/resolution text centered in top bar */
+.cam-info-inline { display: none; }
+.cam.fullscreen .cam-info-inline {
+  display: block;
+  flex: 1;
+  text-align: center;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.6);
+  pointer-events: none;
+}
+
+/* Hide old floating info-tooltip in fullscreen */
+.cam.fullscreen .cam-info-tooltip { display: none !important; }
+
+/* Quality toggle + playback btn in top bar */
+.cam.fullscreen .cam-top-right {
+  position: static;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.cam.fullscreen .cam-quality-toggle { opacity: 1; }
+.cam.fullscreen .quality-opt { font-size: 10px; padding: 3px 7px; }
+.cam.fullscreen .cam-playback-btn { display: none; }
+
+/* Fullscreen: seek-timeline layout */
+.cam.fullscreen .cam-seek-timeline {
+  display: flex !important;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0;
+}
+
+.cam.fullscreen .seek-bar-wrap {
+  margin-top: 0;
+  padding: 0 16px 4px;
+  background: rgba(0, 0, 0, 0.7);
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.cam.fullscreen .seek-bar {
+  height: 14px;
+  border-radius: 6px;
+}
+
+.cam.fullscreen .seek-cursor { width: 14px; height: 14px; }
+
+.cam.fullscreen .seek-labels {
+  font-size: 9px;
+  padding-top: 2px;
+  color: rgba(255, 255, 255, 0.3);
+}
+
+.cam.fullscreen .seek-cursor-time { display: none; }
+.cam.fullscreen .seek-time-tooltip { font-size: 13px; padding: 3px 10px; top: -24px; }
+.cam.fullscreen .seek-now-label { font-size: 10px; top: -18px; padding: 1px 6px; }
+
+/* Cursor detail — shows time + delta below bar on cursor hover */
+.seek-cursor-detail {
+  display: none;
+}
+
+.cam.fullscreen .seek-cursor-detail {
+  display: block;
+  position: absolute;
+  top: calc(100% - 1px);
+  transform: translateX(-50%);
+  font-family: var(--mono);
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.15s;
+  white-space: nowrap;
+  z-index: 2;
+  background: rgba(0, 0, 0, 0.8);
+  padding: 1px 6px;
+  border-radius: 3px;
+}
+
+.cam.fullscreen .seek-cursor-detail.visible { opacity: 1; }
+
+.scd-time {
+  font-size: 10px;
+  font-weight: 500;
+  color: #ffa502;
+}
+
+.scd-delta {
+  font-size: 8px;
+  color: rgba(0, 212, 170, 0.4);
+  margin-left: 4px;
+}
+
+/* Fullscreen LIVE: green seek bar always visible */
+.cam.fullscreen.fs-live .seek-date-nav { display: none; }
+
+/* LIVE: green fill instead of amber */
+.cam.fullscreen.fs-live .seek-fill { background: var(--accent); opacity: 0.3; }
+.cam.fullscreen.fs-live .seek-cursor { background: var(--accent); box-shadow: 0 0 6px rgba(0, 212, 170, 0.5); }
+.cam.fullscreen.fs-live .seek-now { display: none !important; }
+.cam.fullscreen.fs-live .seek-cursor-time { display: none; }
+.cam.fullscreen.fs-live .seek-cursor-line { display: none; }
+.cam.fullscreen.fs-live .seek-unavailable { display: none !important; }
+
+
 /* ── Fullscreen ── */
 
 .cam.fullscreen {
@@ -973,19 +1825,8 @@ body {
   background: #000;
 }
 
-.cam.fullscreen .cam-overlay   { padding: 10px 16px; }
-.cam.fullscreen .cam-name      { font-size: 11px; }
-.cam.fullscreen .cam-label     { font-size: 9px; }
-.cam.fullscreen .cam-mode      { font-size: 9px; padding: 2px 6px; opacity: 1; }
 .cam.fullscreen .cam-bitrate   { display: none; }
-.cam.fullscreen .cam-top-right { top: 10px; right: 10px; }
 .cam.fullscreen .cam-timeline  { height: 4px; }
-
-.cam.fullscreen .cam-audio-wrap { width: 26px; height: 26px; }
-.cam.fullscreen .cam-audio { width: 26px; height: 26px; }
-.cam.fullscreen .cam-audio-wrap::before { width: 38px; height: 38px; }
-.cam.fullscreen .cam-quality-toggle { opacity: 1; }
-.cam.fullscreen .quality-opt { font-size: 10px; padding: 3px 7px; }
 
 
 /* ── Loading State ── */
@@ -1021,25 +1862,51 @@ body {
 .cam.fullscreen .cam-spinner { width: 48px; height: 48px; }
 .cam.fullscreen .cam-loading-text { font-size: 13px; }
 
+.cam-loading-dots {
+  display: flex;
+  gap: 5px;
+}
+.cam-loading-dots span {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.15);
+  transition: background 0.3s;
+}
+.cam-loading-dots span.active { background: var(--warn); }
+.cam.fullscreen .cam-loading-dots span { width: 7px; height: 7px; }
+.cam.fullscreen .cam-loading-dots { gap: 6px; }
+
 
 /* ── Keyboard Hint ── */
 
+@keyframes hint-ripple {
+  0% { box-shadow: 0 0 0 0 rgba(255,171,0,0.35), 0 0 0 0 rgba(255,171,0,0.15); }
+  50% { box-shadow: 0 0 0 6px rgba(255,171,0,0), 0 0 0 0 rgba(255,171,0,0.3); }
+  100% { box-shadow: 0 0 0 6px rgba(255,171,0,0), 0 0 0 12px rgba(255,171,0,0); }
+}
+
 .kbd-hint {
   position: fixed;
-  bottom: 10px;
+  bottom: 80px;
   left: 50%;
   transform: translateX(-50%);
   font-family: var(--mono);
   font-size: 10px;
   color: var(--text-dim);
-  background: var(--surface);
-  border: 1px solid var(--border);
+  background: rgba(20, 20, 24, 0.8);
+  border: 1px solid rgba(255, 171, 0, 0.15);
   padding: 4px 10px;
   border-radius: 3px;
   z-index: 300;
   opacity: 0;
   transition: opacity 0.3s;
   pointer-events: none;
+}
+
+.kbd-hint.show {
+  opacity: 1;
+  animation: hint-ripple 2.5s ease-out infinite;
 }
 
 .kbd-hint.show { opacity: 1; }
@@ -1111,7 +1978,6 @@ body {
 }
 
 .cam-info-tooltip.visible { opacity: 1; }
-.cam.fullscreen .cam-info-tooltip { opacity: 1; font-size: 12px; padding: 4px 12px; }
 
 
 /* ── Light Theme ── */
@@ -1182,9 +2048,6 @@ body {
   .cam-label { font-size: 9px; }
   .cam-mode { font-size: 7px; }
   .cam-overlay { padding: 3px 6px; }
-
-  .cam.fullscreen .cam-name { font-size: 14px; }
-  .cam.fullscreen .cam-overlay { padding: 8px 12px; }
 
   .cam-playback-panel input[type="datetime-local"] { width: 130px; font-size: 10px; }
   .cam-playback-panel { padding: 8px; }

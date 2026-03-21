@@ -10,7 +10,7 @@
 
 import { CamPlayer } from './player.js';
 
-(window._oko = window._oko || {}).cameraView = 'v4b8';
+(window._oko = window._oko || {}).cameraView = 'v4f8';
 
 export class CameraView {
   /**
@@ -38,6 +38,20 @@ export class CameraView {
     this._timelineCanvas = this.el.querySelector('.cam-timeline canvas');
     this._qualityToggle = this.el.querySelector('.cam-quality-toggle');
     this._infoTooltip = this.el.querySelector('.cam-info-tooltip');
+    this._snapshot = this.el.querySelector('.cam-snapshot');
+
+    // Snapshot preload logging
+    if (this._snapshot) {
+      this._snapshot.onload = () => {
+        console.log(`[snapshot] ${this.id}: loaded (${this._snapshot.naturalWidth}×${this._snapshot.naturalHeight})`);
+      };
+      this._snapshot.onerror = () => {
+        console.warn(`[snapshot] ${this.id}: failed to load`);
+        this._snapshot.style.display = 'none';
+      };
+    } else {
+      console.log(`[snapshot] ${this.id}: disabled (snapshots_enabled=${window.__okoConfig?.snapshots_enabled})`);
+    }
 
     // HD state
     this._hdPlayer = null;
@@ -55,7 +69,10 @@ export class CameraView {
   // ── Public ──
 
   /** Start streaming. Transcode is triggered reactively if codec mismatch detected. */
-  start() { this.player.start(); }
+  start() {
+    this.player.start();
+    if (!this.isPlayback) this._startGhudLive();
+  }
 
   /** Stop ALL streaming (SD + HD + playback) and mark disabled. */
   disable() {
@@ -217,13 +234,88 @@ export class CameraView {
     // Show info tooltip immediately
     const p = this._playbackPlayer || this._hdPlayer || this.player;
     if (p) this._updateInfoTooltip(p, p.bitrate || 0);
+
+    // Populate fullscreen HUD info row
+    const fsName = this.el.querySelector('.seek-info-name');
+    if (fsName) fsName.textContent = this.id;
+
+    if (!this.isPlayback) {
+      // LIVE mode: green accent, update time
+      this.el.classList.add('fs-live');
+      this._seekCursorFraction = undefined;
+      const recDot = this.el.querySelector('.seek-info-rec-dot');
+      const recText = this.el.querySelector('.seek-info-rec-text');
+      if (recText) recText.textContent = 'LIVE';
+      this._updateFsLiveTime();
+      this._fsLiveTimer = setInterval(() => this._updateFsLiveTime(), 1000);
+    } else {
+      this.el.classList.remove('fs-live');
+    }
+
+    // Restore playback panel if it was open before
+    if (this._panelWasOpen) {
+      const panel = this.el.querySelector('.cam-playback-panel');
+      if (panel) panel.classList.add('open');
+      this._panelWasOpen = false;
+    }
+  }
+
+  /** Update LIVE time in fullscreen HUD + seek bar position. */
+  _updateFsLiveTime() {
+    const now = new Date();
+    const pad = (n) => String(n).padStart(2, '0');
+    const fsTime = this.el.querySelector('.seek-info-time');
+    const fsDate = this.el.querySelector('.seek-info-date-full');
+    if (fsTime) fsTime.textContent = `${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
+    if (fsDate) fsDate.textContent = `${pad(now.getDate())}.${pad(now.getMonth()+1)}.${now.getFullYear()}`;
+
+    // Update seek bar to show day progress
+    const seconds = now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds();
+    const fraction = seconds / 86400;
+    const fill = this.el.querySelector('.seek-fill');
+    const cursor = this.el.querySelector('.seek-cursor');
+    if (fill) fill.style.width = `${fraction * 100}%`;
+    if (cursor) cursor.style.left = `${fraction * 100}%`;
+  }
+
+  /** Start LIVE grid HUD — update bar + time every second. */
+  _startGhudLive() {
+    this._stopGhudLive();
+    // Set initial labels
+    const recLabel = this.el.querySelector('.ghud-rec-label');
+    if (recLabel) recLabel.textContent = 'LIVE';
+    this._updateGhudLive();
+    this._ghudLiveTimer = setInterval(() => this._updateGhudLive(), 1000);
+  }
+
+  /** Stop LIVE grid HUD timer. */
+  _stopGhudLive() {
+    clearInterval(this._ghudLiveTimer);
+    this._ghudLiveTimer = null;
+  }
+
+  /** Update LIVE grid HUD bar position + time. */
+  _updateGhudLive() {
+    const now = new Date();
+    const pad = (n) => String(n).padStart(2, '0');
+    const seconds = now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds();
+    const fraction = seconds / 86400;
+    const fill = this.el.querySelector('.ghud-fill');
+    const cursor = this.el.querySelector('.ghud-cursor');
+    const time = this.el.querySelector('.ghud-time');
+    if (fill) fill.style.width = `${fraction * 100}%`;
+    if (cursor) cursor.style.left = `${fraction * 100}%`;
+    if (time) time.textContent = `${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
   }
 
   /** Exit in-page fullscreen mode. */
   exitFullscreen() {
     this.el.classList.remove('fullscreen');
-    // Close playback panel
+    this.el.classList.remove('fs-live');
+    clearInterval(this._fsLiveTimer);
+    // Save and close playback panel
     const panel = this.el.querySelector('.cam-playback-panel');
+    this._panelWasOpen = panel && panel.classList.contains('open');
     if (panel) panel.classList.remove('open');
     const pbBtn = this.el.querySelector('.cam-playback-btn');
     if (pbBtn) pbBtn.classList.remove('active');
@@ -335,8 +427,30 @@ export class CameraView {
   _showLoading(text) {
     this._loadingText.textContent = text;
     this._loading.style.display = 'flex';
-    // Don't poll for video render if camera is disabled (NVR offline)
-    if (this.player.enabled) this._startRenderCheck();
+
+    // Show snapshot overlay again while reconnecting
+    if (this._snapshot && this._snapshot.classList.contains('loaded')) {
+      this._snapshot.classList.remove('loaded');
+      this._snapshot.style.display = '';
+      this._snapshot.src = `/backend/snapshot/${this.id}?t=${Date.now()}`;
+      console.log(`[snapshot] ${this.id}: re-showing (stream reconnecting)`);
+    }
+
+    // Set loading stage dots: 1=connecting, 2=negotiating/buffering, 3=decoding
+    const dots = this._loading.querySelector('.cam-loading-dots');
+    if (dots) {
+      const t = (text || '').toLowerCase();
+      let stage = 1;
+      if (t.includes('buffer') || t.includes('keyframe') || t.includes('waiting')) stage = 2;
+      if (t.includes('codec') && !t.includes('fallback')) stage = 2;
+      if (t.includes('playing')) stage = 3;
+      const spans = dots.querySelectorAll('span');
+      spans.forEach((s, i) => s.classList.toggle('active', i < stage));
+    }
+
+    // Poll for video render: check BOTH sd player and playback player
+    const activePlayer = this._playbackPlayer || this.player;
+    if (activePlayer.enabled) this._startRenderCheck();
   }
 
   /** Hide loading spinner. */
@@ -344,6 +458,11 @@ export class CameraView {
     this._loading.style.display = 'none';
     this._stopRenderCheck();
     this._clearFreezeFrame();
+    // Fade out snapshot overlay once real video is playing
+    if (this._snapshot && !this._snapshot.classList.contains('loaded')) {
+      this._snapshot.classList.add('loaded');
+      console.log(`[snapshot] ${this.id}: fading out (video playing)`);
+    }
   }
 
   /** Poll until video actually has frames, then hide loading. */
@@ -400,23 +519,30 @@ export class CameraView {
     if (!player) return;
     const p = player;
     const full = this.el.classList.contains('fullscreen');
-    const parts = full ? [this.id] : [];
+    const parts = full ? [] : [];
 
-    if (p.mode) parts.push(full ? p.mode.toUpperCase() : p.mode.toUpperCase().replace('WEBRTC', 'WR'));
-    if (kbps > 0) parts.push(`${kbps} kbps`);
-    const v = this.video;
-    if (v.videoWidth) {
-      parts.push(full ? `${v.videoWidth}×${v.videoHeight}` : `${v.videoWidth}p`);
+    if (!full) {
+      // Grid: compact format
+      if (p.mode) parts.push(p.mode.toUpperCase().replace('WEBRTC', 'WR'));
+      if (kbps > 0) parts.push(`${kbps} kbps`);
+      const v = this.video;
+      if (v.videoWidth) parts.push(`${v.videoWidth}p`);
+      if (this.codec) parts.push(this.codec === 'hevc' ? 'H265' : 'H264');
+      if (this.el.classList.contains('paused')) parts.push('PAUSED');
+      this._infoTooltip.textContent = parts.join('·');
+    } else {
+      // Fullscreen: verbose format into inline element
+      if (p.mode) parts.push(p.mode.toUpperCase());
+      if (kbps > 0) parts.push(`${kbps} kbps`);
+      const v = this.video;
+      if (v.videoWidth) parts.push(`${v.videoWidth}×${v.videoHeight}`);
+      if (this.codec) parts.push(this.codec === 'hevc' ? 'H.265' : 'H.264');
+      if (this.el.classList.contains('paused')) parts.push('PAUSED');
+      const text = parts.join(' · ');
+      this._infoTooltip.textContent = text;
+      const infoInline = this.el.querySelector('.cam-info-inline');
+      if (infoInline) infoInline.textContent = text;
     }
-    if (this.codec) {
-      parts.push(full
-        ? (this.codec === 'hevc' ? 'H.265' : 'H.264')
-        : (this.codec === 'hevc' ? 'H265' : 'H264'));
-    }
-    if (this.el.classList.contains('paused')) {
-      parts.push('PAUSED');
-    }
-    this._infoTooltip.textContent = parts.join(full ? ' · ' : '·');
 
     // In fullscreen, always visible
     if (full) {
@@ -587,8 +713,9 @@ export class CameraView {
     this._playbackDate.setHours(0, 0, 0, 0); // midnight of that day
     this._playbackOffset = (startTime - this._playbackDate) / 1000;
     this._playbackStart = new Date();
+    this._updateDateLabel();
 
-    this.player.stop();
+    this.player.disable();  // fully disable SD — prevent auto-reconnect during playback
     // Stop HD if active — playback uses its own player
     if (this._hdPlayer) {
       this._hdPlayer.disable();
@@ -612,14 +739,29 @@ export class CameraView {
       }
     };
 
-    // HEVC → use MSE only if browser doesn't support H.265 WebRTC
-    if (forceMSE && !CamPlayer.h265WebRTCSupported) {
+    // HEVC playback: use MSE when backend says forceMSE OR config forces it
+    const useMSE = forceMSE && (window.__okoConfig?.playback_force_mse !== false);
+    if (useMSE) {
+      console.log(`[cam] ${this.id}: playback using MSE (forceMSE=${forceMSE}, config=${window.__okoConfig?.playback_force_mse})`);
       this._playbackPlayer.startMSE();
     } else {
       this._playbackPlayer.start();
     }
 
     this.el.classList.add('playback-mode');
+
+    // Stop LIVE grid timer, switch to archive labels
+    this._stopGhudLive();
+    const ghudRecLabel = this.el.querySelector('.ghud-rec-label');
+    if (ghudRecLabel) ghudRecLabel.textContent = 'REC';
+
+    // Switch fullscreen HUD from LIVE to ARCHIVE mode
+    this.el.classList.remove('fs-live');
+    clearInterval(this._fsLiveTimer);
+    const fsName = this.el.querySelector('.seek-info-name');
+    if (fsName) fsName.textContent = this.id;
+    const fsRecText = this.el.querySelector('.seek-info-rec-text');
+    if (fsRecText) fsRecText.textContent = 'REC';
 
     // Real-time now marker update (moves the "now" line on today's timeline)
     clearInterval(this._nowMarkerTimer);
@@ -673,6 +815,15 @@ export class CameraView {
     this.el.classList.remove('playback-mode');
     this.el.querySelector('.cam-seek-timeline').classList.remove('active');
 
+    // Restore fullscreen HUD to LIVE mode if in fullscreen
+    if (this.el.classList.contains('fullscreen')) {
+      this.el.classList.add('fs-live');
+      const recText = this.el.querySelector('.seek-info-rec-text');
+      if (recText) recText.textContent = 'LIVE';
+      this._updateFsLiveTime();
+      this._fsLiveTimer = setInterval(() => this._updateFsLiveTime(), 1000);
+    }
+
     // Restore SD/HD toggle
     this._qualityToggle.dataset.mode = '';
     this._qualityToggle.innerHTML = '<span class="quality-opt quality-sd active">SD</span><span class="quality-opt quality-hd">HD</span>';
@@ -687,6 +838,9 @@ export class CameraView {
     liveBtn.innerHTML = '&#9673; Live';
 
     this.player.start();
+
+    // Restart LIVE grid HUD timer
+    this._startGhudLive();
 
     // Reset quality toggle to SD
     this._qualityToggle.querySelector('.quality-hd').classList.remove('active');
@@ -723,6 +877,7 @@ export class CameraView {
     const secondsInDay = 24 * 3600;
     const currentSeconds = pos.getHours() * 3600 + pos.getMinutes() * 60 + pos.getSeconds();
     const fraction = Math.min(currentSeconds / secondsInDay, 1);
+    this._seekCursorFraction = fraction;
 
     const fill = this.el.querySelector('.seek-fill');
     const cursor = this.el.querySelector('.seek-cursor');
@@ -743,19 +898,77 @@ export class CameraView {
     const dateStr = `${pad(pos.getDate())}.${pad(pos.getMonth() + 1)}`;
     this._modeBadge.innerHTML = `<span class="rec-dot">● REC</span><span class="rec-time">${timeStr}</span><span class="rec-date">${dateStr}</span>`;
     this._modeBadge.className = 'cam-mode playback';
+
+    // Update fullscreen HUD info row
+    const fsTime = this.el.querySelector('.seek-info-time');
+    const fsDateFull = this.el.querySelector('.seek-info-date-full');
+    if (fsTime) fsTime.textContent = timeStr;
+    if (fsDateFull) fsDateFull.textContent = `${pad(pos.getDate())}.${pad(pos.getMonth() + 1)}.${pos.getFullYear()}`;
+
+    // Update grid HUD
+    const ghudFill = this.el.querySelector('.ghud-fill');
+    const ghudCursor = this.el.querySelector('.ghud-cursor');
+    const ghudTime = this.el.querySelector('.ghud-time');
+    if (ghudFill) ghudFill.style.width = `${fraction * 100}%`;
+    if (ghudCursor) ghudCursor.style.left = `${fraction * 100}%`;
+    if (ghudTime) ghudTime.textContent = timeStr;
+  }
+
+  /** Update the date label on the seek timeline. */
+  _updateDateLabel() {
+    const pad = (n) => String(n).padStart(2, '0');
+    const d = this._playbackDate;
+    const now = new Date();
+    const isToday = d && d.getFullYear() === now.getFullYear()
+      && d.getMonth() === now.getMonth()
+      && d.getDate() === now.getDate();
+    const days = ['ВС', 'ПН', 'ВТ', 'СР', 'ЧТ', 'ПТ', 'СБ'];
+
+    // Fullscreen seek-timeline date label
+    const label = this.el.querySelector('.seek-date-label');
+    if (label) {
+      if (!d) { label.innerHTML = ''; }
+      else {
+        const weekday = days[d.getDay()];
+        label.innerHTML = `<span class="seek-date-weekday">${weekday}</span>${pad(d.getDate())}.${pad(d.getMonth() + 1)}`;
+        label.classList.toggle('is-today', isToday);
+      }
+    }
+    const nextBtn = this.el.querySelector('.seek-day-next');
+    if (nextBtn) nextBtn.classList.toggle('disabled', isToday);
+
+    // Grid HUD date label
+    const ghudDate = this.el.querySelector('.ghud-date');
+    if (ghudDate) {
+      if (!d) { ghudDate.textContent = ''; }
+      else {
+        const weekday = days[d.getDay()];
+        ghudDate.textContent = `${weekday} ${pad(d.getDate())}.${pad(d.getMonth() + 1)}`;
+        ghudDate.classList.toggle('is-today', isToday);
+      }
+    }
+    const ghudNext = this.el.querySelector('.ghud-day-next');
+    if (ghudNext) ghudNext.classList.toggle('disabled', isToday);
   }
 
   /** Show/hide unavailable zone and now marker based on playback date. */
   _updateSeekAvailability() {
+    // Fullscreen seek-timeline elements
     const unavailable = this.el.querySelector('.seek-unavailable');
     const nowMarker = this.el.querySelector('.seek-now');
     const nowLabel = this.el.querySelector('.seek-now-label');
+    // Grid HUD elements
+    const ghudUnavail = this.el.querySelector('.ghud-unavailable');
+    const ghudNow = this.el.querySelector('.ghud-now');
 
-    if (!this._playbackDate) {
-      unavailable.style.display = 'none';
-      nowMarker.style.display = 'none';
-      return;
-    }
+    const hideAll = () => {
+      if (unavailable) unavailable.style.display = 'none';
+      if (nowMarker) nowMarker.style.display = 'none';
+      if (ghudUnavail) ghudUnavail.style.display = 'none';
+      if (ghudNow) ghudNow.style.display = 'none';
+    };
+
+    if (!this._playbackDate) { hideAll(); return; }
 
     const now = new Date();
     const pbDate = this._playbackDate;
@@ -763,13 +976,8 @@ export class CameraView {
       && now.getMonth() === pbDate.getMonth()
       && now.getDate() === pbDate.getDate();
 
-    if (!isToday) {
-      unavailable.style.display = 'none';
-      nowMarker.style.display = 'none';
-      return;
-    }
+    if (!isToday) { hideAll(); return; }
 
-    // Available up to now - 10 minutes
     const bufferMinutes = 1;
     const availableUntil = new Date(now.getTime() - bufferMinutes * 60 * 1000);
     const availSeconds = availableUntil.getHours() * 3600 + availableUntil.getMinutes() * 60 + availableUntil.getSeconds();
@@ -778,32 +986,51 @@ export class CameraView {
     const nowSeconds = now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds();
     const nowFraction = Math.min(nowSeconds / (24 * 3600), 1);
 
-    unavailable.style.display = 'block';
-    unavailable.style.left = `${availFraction * 100}%`;
-    unavailable.style.right = '0';
+    // Fullscreen seek-timeline
+    if (unavailable) {
+      unavailable.style.display = 'block';
+      unavailable.style.left = `${availFraction * 100}%`;
+      unavailable.style.right = '0';
+    }
+    if (nowMarker) {
+      nowMarker.style.display = 'block';
+      nowMarker.style.left = `${nowFraction * 100}%`;
+    }
+    this._seekNowFraction = nowFraction;
 
-    nowMarker.style.display = 'block';
-    nowMarker.style.left = `${nowFraction * 100}%`;
+    if (nowLabel) {
+      const cursorDist = Math.abs((this._seekCursorFraction || 0) - nowFraction);
+      nowLabel.style.opacity = cursorDist < 0.04 ? '0' : '';
+      const pad = (n) => String(n).padStart(2, '0');
+      nowLabel.textContent = `${pad(now.getHours())}:${pad(now.getMinutes())}`;
+    }
 
-    const pad = (n) => String(n).padStart(2, '0');
-    nowLabel.textContent = `${pad(now.getHours())}:${pad(now.getMinutes())}`;
+    // Grid HUD
+    if (ghudUnavail) {
+      ghudUnavail.style.display = 'block';
+      ghudUnavail.style.left = `${availFraction * 100}%`;
+      ghudUnavail.style.right = '0';
+    }
+    if (ghudNow) {
+      ghudNow.style.display = 'block';
+      ghudNow.style.left = `${nowFraction * 100}%`;
+    }
   }
 
-  /** Check if a seek time falls in the unavailable zone (today only). */
-  _isSeekUnavailable(hours, minutes) {
+  /** Check if a seek time falls in the unavailable zone (future on today). */
+  _isSeekUnavailable(seekDate) {
     if (!this._playbackDate) return false;
     const now = new Date();
-    const pbDate = this._playbackDate;
-    const isToday = now.getFullYear() === pbDate.getFullYear()
-      && now.getMonth() === pbDate.getMonth()
-      && now.getDate() === pbDate.getDate();
-    if (!isToday) return false;
+
+    // Only today's playback has an unavailable zone
+    const isSeekToday = now.getFullYear() === seekDate.getFullYear()
+      && now.getMonth() === seekDate.getMonth()
+      && now.getDate() === seekDate.getDate();
+    if (!isSeekToday) return false;
 
     const bufferMinutes = 1;
     const availableUntil = new Date(now.getTime() - bufferMinutes * 60 * 1000);
-    const seekMinutes = hours * 60 + minutes;
-    const availMinutes = availableUntil.getHours() * 60 + availableUntil.getMinutes();
-    return seekMinutes > availMinutes;
+    return seekDate > availableUntil;
   }
 
   /** Update badge during playback with mode info. */
@@ -856,8 +1083,10 @@ export class CameraView {
           <circle cx="18" cy="18" r="14" fill="none" stroke="var(--warn)" stroke-width="3" stroke-dasharray="22 66" stroke-linecap="round"/>
         </svg>
         <span class="cam-loading-text">connecting</span>
+        <div class="cam-loading-dots"><span></span><span></span><span></span></div>
       </div>
       <video muted autoplay playsinline></video>
+      ${window.__okoConfig?.snapshots_enabled !== false ? `<img class="cam-snapshot" src="/backend/snapshot/${this.id}" alt="" loading="lazy">` : ''}
       <img class="cam-freeze" alt="">
       <div class="cam-pause-indicator">
         <svg viewBox="0 0 24 24" width="32" height="32" fill="white"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
@@ -868,14 +1097,31 @@ export class CameraView {
           <polyline points="20 6 9 17 4 12"/>
         </svg>
       </div>
-      <div class="cam-top-right">
-        <div class="cam-quality-toggle" title="Toggle SD/HD stream (H)">
-          <span class="quality-opt quality-sd active">SD</span>
-          <span class="quality-opt quality-hd">HD</span>
+      <div class="cam-info-tooltip"></div>
+      <div class="cam-overlay">
+        <div class="cam-name-wrap">
+          <span class="cam-name">${this.id}</span>
+          ${this.label ? `<span class="cam-name-sep"></span><span class="cam-label">${this.label}</span>` : ''}
         </div>
-        <svg class="cam-playback-btn" viewBox="0 0 24 24" fill="white" title="Archive playback panel">
-          <path d="M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67z"/>
-        </svg>
+        <div class="cam-info-inline"></div>
+        <div class="cam-top-right">
+          <div class="cam-quality-toggle" title="Toggle SD/HD stream (H)">
+            <span class="quality-opt quality-sd active">SD</span>
+            <span class="quality-opt quality-hd">HD</span>
+          </div>
+          <svg class="cam-playback-btn" viewBox="0 0 24 24" fill="white" title="Archive playback panel">
+            <path d="M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67z"/>
+          </svg>
+        </div>
+        <div class="cam-badges">
+          <div class="cam-audio-wrap" title="Toggle audio — click to unmute">
+            <svg class="cam-audio" viewBox="0 0 24 24" fill="white">
+              <path d="M14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77zM16.5 12c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM3 9v6h4l5 5V4L7 9H3z"/>
+            </svg>
+          </div>
+          <span class="cam-mode"></span>
+          <div class="cam-status"></div>
+        </div>
       </div>
       <div class="cam-playback-panel">
         <div class="playback-row">
@@ -903,29 +1149,50 @@ export class CameraView {
           <button class="seek-btn" data-offset="3600" title="Jump 1 hour forward">+1h</button>
         </div>
       </div>
-      <div class="cam-info-tooltip"></div>
-      <div class="cam-overlay">
-        <div class="cam-name-wrap">
-          <span class="cam-name">${this.id}</span>
-          ${this.label ? `<span class="cam-name-sep"></span><span class="cam-label">${this.label}</span>` : ''}
-        </div>
-        <div class="cam-badges">
-          <div class="cam-audio-wrap" title="Toggle audio — click to unmute">
-            <svg class="cam-audio" viewBox="0 0 24 24" fill="white">
-              <path d="M14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77zM16.5 12c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM3 9v6h4l5 5V4L7 9H3z"/>
-            </svg>
-          </div>
-          <span class="cam-mode"></span>
-          <div class="cam-status"></div>
-        </div>
-      </div>
       <div class="cam-seek-timeline">
+        <div class="seek-info-row">
+          <span class="seek-info-name"></span>
+          <span class="seek-info-status">
+            <span class="seek-info-rec-dot"><span class="seek-info-rec-inner"></span></span>
+            <span class="seek-info-rec-text">REC</span>
+          </span>
+          <button class="seek-info-time-btn" title="Open archive panel (P)">
+            <span class="seek-info-time"></span>
+            <span class="seek-info-time-arrow">▾</span>
+          </button>
+          <span class="seek-info-date-full"></span>
+          <span class="seek-info-spacer"></span>
+          <div class="seek-info-seek-btns">
+            <button class="fs-seek-btn" data-offset="-3600">-1h</button>
+            <button class="fs-seek-btn" data-offset="-900">-15m</button>
+            <button class="fs-seek-btn" data-offset="-300">-5m</button>
+            <button class="fs-seek-btn" data-offset="-60">-1m</button>
+            <button class="fs-seek-btn fs-seek-fwd" data-offset="60">+1m</button>
+            <button class="fs-seek-btn fs-seek-fwd" data-offset="300">+5m</button>
+            <button class="fs-seek-btn fs-seek-fwd" data-offset="900">+15m</button>
+            <button class="fs-seek-btn fs-seek-fwd" data-offset="3600">+1h</button>
+            <button class="fs-seek-more" title="More seek options">⋯</button>
+            <div class="fs-seek-extra">
+              <button class="fs-seek-btn" data-offset="-21600">-6h</button>
+              <button class="fs-seek-btn" data-offset="-1800">-30m</button>
+              <button class="fs-seek-btn fs-seek-fwd" data-offset="1800">+30m</button>
+              <button class="fs-seek-btn fs-seek-fwd" data-offset="21600">+6h</button>
+            </div>
+          </div>
+          <div class="seek-date-nav">
+            <button class="seek-day-btn seek-day-prev" title="Previous day">◂</button>
+            <span class="seek-date-label"></span>
+            <button class="seek-day-btn seek-day-next" title="Next day">▸</button>
+          </div>
+        </div>
+        <div class="seek-bar-wrap">
         <div class="seek-bar">
           <div class="seek-ticks"><span></span><span></span><span></span><span></span><span></span><span></span></div>
           <div class="seek-fill"></div>
           <div class="seek-cursor"></div>
           <div class="seek-cursor-line"></div>
           <div class="seek-cursor-time"></div>
+          <div class="seek-cursor-detail"></div>
           <div class="seek-unavailable"></div>
           <div class="seek-now"><span class="seek-now-label"></span></div>
         </div>
@@ -933,8 +1200,35 @@ export class CameraView {
           <span>00:00</span><span>04:00</span><span>08:00</span><span>12:00</span><span>16:00</span><span>20:00</span><span>24:00</span>
         </div>
         <div class="seek-time-tooltip"></div>
+        <div class="seek-live-pill">▶ LIVE</div>
+        </div>
       </div>
       <div class="cam-timeline"><canvas height="3"></canvas></div>
+      <button class="ghud-live-btn">
+        ▶ LIVE
+        <span class="ghud-live-progress"></span>
+      </button>
+      <div class="cam-grid-hud">
+        <div class="ghud-info">
+          <span class="ghud-name">${this.id}</span>
+          <span class="ghud-status">
+            <span class="ghud-rec-dot"></span>
+            <span class="ghud-rec-label">REC</span>
+            <span class="ghud-time"></span>
+          </span>
+          <span class="ghud-spacer"></span>
+          <button class="ghud-day-prev">◂</button>
+          <span class="ghud-date"></span>
+          <button class="ghud-day-next">▸</button>
+        </div>
+        <div class="ghud-bar">
+          <div class="ghud-fill"></div>
+          <div class="ghud-cursor"></div>
+          <div class="ghud-unavailable"></div>
+          <div class="ghud-now"></div>
+        </div>
+        <div class="ghud-tooltip"></div>
+      </div>
     `;
 
     return el;
@@ -979,6 +1273,9 @@ export class CameraView {
       if (e.target.closest('.cam-playback-panel')) return;
       if (e.target.closest('.cam-audio-wrap')) return;
       if (e.target.closest('.cam-select')) return;
+      if (e.target.closest('.cam-grid-hud')) return;
+      if (e.target.closest('.ghud-live-btn')) return;
+      if (e.target.closest('.seek-info-row')) return;
       if ((e.ctrlKey || e.metaKey) && !this.el.classList.contains('fullscreen')) {
         this.toggleSelect();
         return;
@@ -996,6 +1293,9 @@ export class CameraView {
     this.el.addEventListener('dblclick', (e) => {
       e.preventDefault();
       if (e.target.closest('.cam-playback-panel')) return;
+      if (e.target.closest('.cam-grid-hud')) return;
+      if (e.target.closest('.ghud-live-btn')) return;
+      if (e.target.closest('.seek-info-row')) return;
       if (this.el.classList.contains('fullscreen')) {
         this.togglePause();
       } else if (this.onDoubleClick) {
@@ -1092,12 +1392,24 @@ export class CameraView {
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
         const offset = parseInt(btn.dataset.offset);
-        const pos = this.playbackPosition;
-        if (pos && this.onQuickSeek) {
-          let seekTime = new Date(pos.getTime() + offset * 1000);
-          // Clamp to available zone (today: now - 10min)
-          if (this._isSeekUnavailable(seekTime.getHours(), seekTime.getMinutes())) return;
-          this.onQuickSeek(this, seekTime);
+
+        if (this.isPlayback) {
+          // Archive mode: seek relative to current position
+          const pos = this.playbackPosition;
+          if (pos && this.onQuickSeek) {
+            let seekTime = new Date(pos.getTime() + offset * 1000);
+            if (this._isSeekUnavailable(seekTime)) return;
+            this.onQuickSeek(this, seekTime);
+          }
+        } else if (offset < 0 && this.onPlaybackRequest) {
+          // Live mode + negative offset: start archive from now+offset
+          const seekTime = new Date(Date.now() + offset * 1000);
+          const pad = (n) => String(n).padStart(2, '0');
+          const fmt = (d) => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+          const endOfDay = new Date(seekTime);
+          endOfDay.setHours(23, 59, 59, 0);
+          const resolution = this.el.querySelector('.playback-resolution').value;
+          this.onPlaybackRequest(this, fmt(seekTime), fmt(endOfDay), resolution);
         }
       });
     });
@@ -1119,6 +1431,8 @@ export class CameraView {
     // Seek timeline — click to seek
     const seekBar = this.el.querySelector('.seek-bar');
     const seekTooltip = this.el.querySelector('.seek-time-tooltip');
+    const livePill = this.el.querySelector('.seek-live-pill');
+    const cursorDetail = this.el.querySelector('.seek-cursor-detail');
 
     const getSeekTime = (e) => {
       const rect = seekBar.getBoundingClientRect();
@@ -1134,29 +1448,306 @@ export class CameraView {
       const { fraction, hours, minutes } = getSeekTime(e);
       const pad = (n) => String(n).padStart(2, '0');
       const timeText = `${pad(hours)}:${pad(minutes)}`;
+      const cursorTime = this.el.querySelector('.seek-cursor-time');
+      const full = this.el.classList.contains('fullscreen');
+
+      const cursorDist = Math.abs(fraction - (this._seekCursorFraction || -1));
+
+      // Fullscreen: show cursor-detail when hovering near cursor (archive only)
+      if (full && cursorDetail && !this.el.classList.contains('fs-live')) {
+        if (cursorDist < 0.03 && this._seekCursorFraction !== undefined) {
+          const pos = this.playbackPosition;
+          if (pos) {
+            const ct = `${pad(pos.getHours())}:${pad(pos.getMinutes())}`;
+            const now = new Date();
+            const diffMs = now - pos;
+            const diffMin = Math.floor(Math.abs(diffMs) / 60000);
+            const dH = Math.floor(diffMin / 60);
+            const dM = diffMin % 60;
+            const delta = dH > 0 ? `-${dH}h${pad(dM)}m` : `-${dM}m`;
+            cursorDetail.innerHTML = `<span class="scd-time">${ct}</span><span class="scd-delta">${delta}</span>`;
+          }
+          cursorDetail.style.left = `${(this._seekCursorFraction) * 100}%`;
+          cursorDetail.classList.add('visible');
+        } else {
+          cursorDetail.classList.remove('visible');
+        }
+      }
 
       // Check if hovering over unavailable zone
-      const isUnavailable = this._isSeekUnavailable(hours, minutes);
-      seekTooltip.textContent = isUnavailable ? `${timeText} ✗` : timeText;
-      seekTooltip.classList.toggle('unavailable', isUnavailable);
+      let isUnavailable = false;
+      if (this._playbackDate) {
+        const hoverDate = new Date(this._playbackDate);
+        hoverDate.setHours(hours, minutes, 0, 0);
+        isUnavailable = this._isSeekUnavailable(hoverDate);
+      } else {
+        // LIVE mode: future time is unavailable
+        const now = new Date();
+        const hoverDate = new Date(now);
+        hoverDate.setHours(hours, minutes, 0, 0);
+        isUnavailable = hoverDate > now;
+      }
+      // Unavailable zone: show LIVE pill, hide green tooltip
+      if (isUnavailable) {
+        seekTooltip.classList.remove('visible');
+        livePill.style.left = `${fraction * 100}%`;
+        livePill.classList.add('visible');
+        return;
+      }
+      livePill.classList.remove('visible');
+      seekTooltip.textContent = timeText;
+      seekTooltip.classList.remove('unavailable');
       seekTooltip.style.left = `${fraction * 100}%`;
       seekTooltip.classList.add('visible');
     });
 
     seekBar.addEventListener('mouseleave', () => {
       seekTooltip.classList.remove('visible');
-      seekTooltip.classList.remove('unavailable');
+      livePill.classList.remove('visible');
+      if (cursorDetail) cursorDetail.classList.remove('visible');
     });
 
     seekBar.addEventListener('click', (e) => {
       e.stopPropagation();
-      if (!this._playbackDate || !this.onPlaybackSeek) return;
       const { hours, minutes } = getSeekTime(e);
-      // Block clicks in unavailable zone
-      if (this._isSeekUnavailable(hours, minutes)) return;
+
+      // LIVE mode: click on bar → start archive at clicked time
+      if (!this._playbackDate && this.onPlaybackRequest) {
+        const now = new Date();
+        const seekTime = new Date(now);
+        seekTime.setHours(hours, minutes, 0, 0);
+        if (seekTime > now) return; // future
+        const pad = (n) => String(n).padStart(2, '0');
+        const fmt = (d) => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+        const endOfDay = new Date(now);
+        endOfDay.setHours(23, 59, 59, 0);
+        const resolution = this.el.querySelector('.playback-resolution')?.value || 'original';
+        this.onPlaybackRequest(this, fmt(seekTime), fmt(endOfDay), resolution);
+        return;
+      }
+
+      if (!this._playbackDate || !this.onPlaybackSeek) return;
       const seekTime = new Date(this._playbackDate);
       seekTime.setHours(hours, minutes, 0, 0);
+      // Click in unavailable zone → go to live
+      if (this._isSeekUnavailable(seekTime)) {
+        const liveBtn = this.el.querySelector('.playback-live');
+        if (liveBtn) liveBtn.click();
+        return;
+      }
       this.onPlaybackSeek(this, seekTime);
+    });
+
+    // Day navigation (◀ ▶) on seek timeline
+    this.el.querySelector('.seek-day-prev').addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (!this._playbackDate || !this.onPlaybackSeek) return;
+      const pos = this.playbackPosition;
+      const timeOfDay = pos ? (pos.getHours() * 3600 + pos.getMinutes() * 60 + pos.getSeconds()) : 0;
+      const prevDay = new Date(this._playbackDate.getTime() - 86400000);
+      prevDay.setHours(0, 0, 0, 0);
+      const seekTime = new Date(prevDay.getTime() + timeOfDay * 1000);
+      this.onPlaybackSeek(this, seekTime);
+    });
+
+    this.el.querySelector('.seek-day-next').addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (!this._playbackDate || !this.onPlaybackSeek) return;
+      const nextDay = new Date(this._playbackDate.getTime() + 86400000);
+      nextDay.setHours(0, 0, 0, 0);
+      const now = new Date();
+      if (nextDay > now) return; // entire day is in future
+      const pos = this.playbackPosition;
+      const timeOfDay = pos ? (pos.getHours() * 3600 + pos.getMinutes() * 60 + pos.getSeconds()) : 0;
+      let seekTime = new Date(nextDay.getTime() + timeOfDay * 1000);
+      // If time-of-day hasn't arrived yet on target day, clamp to 00:00
+      if (this._isSeekUnavailable(seekTime)) seekTime = new Date(nextDay);
+      this.onPlaybackSeek(this, seekTime);
+    });
+
+    // ── Grid HUD: LIVE button (long-press) ──
+    const ghudLiveBtn = this.el.querySelector('.ghud-live-btn');
+    let livePressTimer = null;
+    let liveTriggered = false;
+    const LIVE_HOLD_MS = 500;
+
+    ghudLiveBtn.addEventListener('mousedown', (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      liveTriggered = false;
+      ghudLiveBtn.classList.add('pressing');
+      livePressTimer = setTimeout(() => {
+        liveTriggered = true;
+        ghudLiveBtn.classList.remove('pressing');
+        ghudLiveBtn.classList.add('triggered');
+        const playbackLive = this.el.querySelector('.playback-live');
+        if (playbackLive) playbackLive.click();
+        setTimeout(() => ghudLiveBtn.classList.remove('triggered'), 300);
+      }, LIVE_HOLD_MS);
+    });
+
+    const cancelLivePress = (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      clearTimeout(livePressTimer);
+      ghudLiveBtn.classList.remove('pressing');
+    };
+    ghudLiveBtn.addEventListener('mouseup', cancelLivePress);
+    ghudLiveBtn.addEventListener('mouseleave', cancelLivePress);
+    ghudLiveBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+    });
+
+    // ── Grid HUD events ──
+    const ghudBar = this.el.querySelector('.ghud-bar');
+    const ghudTooltip = this.el.querySelector('.ghud-tooltip');
+
+    const getGhudTime = (e) => {
+      const rect = ghudBar.getBoundingClientRect();
+      const fraction = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+      const totalSeconds = fraction * 24 * 3600;
+      const hours = Math.floor(totalSeconds / 3600);
+      const minutes = Math.floor((totalSeconds % 3600) / 60);
+      return { fraction, hours, minutes };
+    };
+
+    ghudBar.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const { hours, minutes } = getGhudTime(e);
+
+      // LIVE mode: click on bar → start archive at clicked time
+      if (!this._playbackDate && this.onPlaybackRequest) {
+        const now = new Date();
+        const seekTime = new Date(now);
+        seekTime.setHours(hours, minutes, 0, 0);
+        if (seekTime > now) return; // future
+        const pad = (n) => String(n).padStart(2, '0');
+        const fmt = (d) => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+        const endOfDay = new Date(now);
+        endOfDay.setHours(23, 59, 59, 0);
+        const resolution = this.el.querySelector('.playback-resolution')?.value || 'original';
+        this.onPlaybackRequest(this, fmt(seekTime), fmt(endOfDay), resolution);
+        return;
+      }
+
+      if (!this._playbackDate || !this.onPlaybackSeek) return;
+      const seekTime = new Date(this._playbackDate);
+      seekTime.setHours(hours, minutes, 0, 0);
+      if (this._isSeekUnavailable(seekTime)) {
+        const liveBtn = this.el.querySelector('.playback-live');
+        if (liveBtn) liveBtn.click();
+        return;
+      }
+      this.onPlaybackSeek(this, seekTime);
+    });
+
+    ghudBar.addEventListener('mousemove', (e) => {
+      e.stopPropagation();
+      const { fraction, hours, minutes } = getGhudTime(e);
+      const pad = (n) => String(n).padStart(2, '0');
+      const timeText = `${pad(hours)}:${pad(minutes)}`;
+
+      let isUnavailable = false;
+      if (this._playbackDate) {
+        const hoverDate = new Date(this._playbackDate);
+        hoverDate.setHours(hours, minutes, 0, 0);
+        isUnavailable = this._isSeekUnavailable(hoverDate);
+      } else {
+        // LIVE mode: future = unavailable
+        const now = new Date();
+        const hoverDate = new Date(now);
+        hoverDate.setHours(hours, minutes, 0, 0);
+        isUnavailable = hoverDate > now;
+      }
+      if (isUnavailable) {
+        ghudTooltip.textContent = '▶ LIVE';
+        ghudTooltip.classList.add('visible', 'live');
+        ghudTooltip.classList.remove('unavailable');
+      } else {
+        ghudTooltip.textContent = timeText;
+        ghudTooltip.classList.add('visible');
+        ghudTooltip.classList.remove('unavailable', 'live');
+      }
+      ghudTooltip.style.left = `${fraction * 100}%`;
+    });
+
+    ghudBar.addEventListener('mouseleave', () => {
+      ghudTooltip.classList.remove('visible', 'live');
+    });
+
+    // Grid HUD day navigation
+    this.el.querySelector('.ghud-day-prev').addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (!this._playbackDate || !this.onPlaybackSeek) return;
+      const pos = this.playbackPosition;
+      const timeOfDay = pos ? (pos.getHours() * 3600 + pos.getMinutes() * 60 + pos.getSeconds()) : 0;
+      const prevDay = new Date(this._playbackDate.getTime() - 86400000);
+      prevDay.setHours(0, 0, 0, 0);
+      this.onPlaybackSeek(this, new Date(prevDay.getTime() + timeOfDay * 1000));
+    });
+
+    this.el.querySelector('.ghud-day-next').addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (!this._playbackDate || !this.onPlaybackSeek) return;
+      const nextDay = new Date(this._playbackDate.getTime() + 86400000);
+      nextDay.setHours(0, 0, 0, 0);
+      if (nextDay > new Date()) return; // entire day is in future
+      const pos = this.playbackPosition;
+      const timeOfDay = pos ? (pos.getHours() * 3600 + pos.getMinutes() * 60 + pos.getSeconds()) : 0;
+      let seekTime = new Date(nextDay.getTime() + timeOfDay * 1000);
+      if (this._isSeekUnavailable(seekTime)) seekTime = new Date(nextDay);
+      this.onPlaybackSeek(this, seekTime);
+    });
+
+    // ── Fullscreen HUD: seek buttons ──
+    this.el.querySelectorAll('.fs-seek-btn').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const offset = parseInt(btn.dataset.offset);
+        if (this.isPlayback) {
+          const pos = this.playbackPosition;
+          if (pos && this.onPlaybackSeek) {
+            let seekTime = new Date(pos.getTime() + offset * 1000);
+            if (this._isSeekUnavailable(seekTime)) return;
+            this.onPlaybackSeek(this, seekTime);
+          }
+        } else if (offset < 0 && this.onPlaybackRequest) {
+          // LIVE: start archive from now+offset
+          const seekTime = new Date(Date.now() + offset * 1000);
+          const pad = (n) => String(n).padStart(2, '0');
+          const fmt = (d) => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+          const endOfDay = new Date(seekTime);
+          endOfDay.setHours(23, 59, 59, 0);
+          const resolution = this.el.querySelector('.playback-resolution').value;
+          this.onPlaybackRequest(this, fmt(seekTime), fmt(endOfDay), resolution);
+        }
+      });
+    });
+
+    // ── Fullscreen HUD: time button → toggle playback panel ──
+    this.el.querySelector('.seek-info-time-btn').addEventListener('click', (e) => {
+      e.stopPropagation();
+      const panel = this.el.querySelector('.cam-playback-panel');
+      const pbBtn = this.el.querySelector('.cam-playback-btn');
+      panel.classList.toggle('open');
+      if (pbBtn) pbBtn.classList.toggle('active', panel.classList.contains('open'));
+      if (panel.classList.contains('open')) {
+        const now = new Date();
+        const ago = new Date(now.getTime() - 3600 * 1000);
+        const pad = (n) => String(n).padStart(2, '0');
+        const fmt = (d) => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+        const endOfDay = (d) => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T23:59`;
+        panel.querySelector('.playback-start').value = fmt(ago);
+        panel.querySelector('.playback-end').value = endOfDay(ago);
+      }
+    });
+
+    // ── Fullscreen HUD: ⋯ more seek buttons toggle ──
+    this.el.querySelector('.fs-seek-more').addEventListener('click', (e) => {
+      e.stopPropagation();
+      const extra = this.el.querySelector('.fs-seek-extra');
+      if (extra) extra.classList.toggle('open');
     });
 
     // drag-and-drop

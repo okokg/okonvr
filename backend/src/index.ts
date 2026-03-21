@@ -7,19 +7,22 @@ import { initStreamManager, cleanupAllInternal, reapOrphanStreams, ensureBaseStr
 import { generateGo2rtcConfig } from './services/go2rtc-config';
 import { startConfigWatcher } from './services/config-watcher';
 import { probeCodecs } from './services/codec-prober';
-import { setUiConfig } from './services/config-store';
+import { setUiConfig, setClientExtras } from './services/config-store';
 import { startNvrHealth } from './services/nvr-health';
+import { startSnapshotCache } from './services/snapshot-cache';
 import { cameraRoutes } from './routes/cameras';
 import { playbackRoutes } from './routes/playback';
 import { hdStreamRoutes } from './routes/hd-stream';
 import { transcodeRoutes } from './routes/transcode';
 import { healthRoutes } from './routes/health';
 import { statsRoutes } from './routes/stats';
+import { snapshotRoutes } from './routes/snapshots';
 
 async function main() {
   const config = loadConfig();
   initDb();
   setUiConfig(config.ui);
+  setClientExtras(config.snapshots, config.playback);
 
   // Auto-discover or use configured channels
   for (const nvr of config.nvrs) {
@@ -76,6 +79,7 @@ async function main() {
   await fastify.register(transcodeRoutes);
   await fastify.register(healthRoutes);
   await fastify.register(statsRoutes);
+  await fastify.register(snapshotRoutes);
 
   await fastify.listen({ port: config.server.port, host: '0.0.0.0' });
   console.log(`Backend listening on port ${config.server.port}`);
@@ -83,6 +87,7 @@ async function main() {
   // Watch oko.yaml for live changes
   startConfigWatcher(config);
   startNvrHealth();
+  startSnapshotCache(config.snapshots, config.go2rtc.api);
 
   setTimeout(() => cleanupAllInternal(), 3000);
 

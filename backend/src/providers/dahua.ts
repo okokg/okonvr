@@ -11,7 +11,7 @@ export class DahuaProvider implements NvrProvider {
   readonly type = 'dahua';
   readonly rtspBase: string;
   readonly httpBase: string;
-  private auth: { username: string; password: string };
+  readonly auth: { username: string; password: string };
 
   constructor(config: NvrConfig) {
     this.rtspBase = `rtsp://${config.username}:${config.password}@${config.host}:${config.port}`;
@@ -25,6 +25,10 @@ export class DahuaProvider implements NvrProvider {
 
   getProbeUrl(camera: CameraConfig): string {
     return `${this.rtspBase}/cam/realmonitor?channel=${camera.channel}&subtype=0`;
+  }
+
+  getSnapshotUrl(camera: CameraConfig): string {
+    return `${this.httpBase}/cgi-bin/snapshot.cgi?channel=${camera.channel}`;
   }
 
   getPlaybackUrl(camera: CameraConfig, start: Date, end: Date): string {

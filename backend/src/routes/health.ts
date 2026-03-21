@@ -1,9 +1,10 @@
 import { FastifyInstance } from 'fastify';
 import { db, stmts } from '../db';
-import { checkHealth, cleanupSessionStreams } from '../services/stream-manager';
+import { checkHealth, cleanupSessionStreams, ensureBaseStreams } from '../services/stream-manager';
 import { clearCodecCache } from '../services/codec-prober';
 import { getUiConfig } from '../services/config-store';
 import { getNvrStatuses } from '../services/nvr-health';
+import { registry } from '../services/camera-registry';
 
 export async function healthRoutes(fastify: FastifyInstance) {
   fastify.get('/health', async () => {
@@ -36,5 +37,24 @@ export async function healthRoutes(fastify: FastifyInstance) {
   fastify.post('/cleanup-session', async () => {
     await cleanupSessionStreams();
     return { ok: true };
+  });
+
+  /** Re-register base streams in go2rtc (triggered by frontend on stream-not-found). */
+  let lastRecovery = 0;
+  fastify.post('/recover-streams', async (req, reply) => {
+    const now = Date.now();
+    if (now - lastRecovery < 15000) {
+      console.log(`[recovery] Skipped — last recovery ${Math.round((now - lastRecovery) / 1000)}s ago (cooldown 15s)`);
+      return { ok: true, skipped: true, cameras: 0 };
+    }
+    lastRecovery = now;
+
+    const ids = registry.allIds();
+    await ensureBaseStreams(ids, (id) => {
+      const entry = registry.getEntry(id);
+      if (!entry) return null;
+      return entry.provider.getLiveUrl(entry.camera);
+    });
+    return { ok: true, cameras: ids.length };
   });
 }
