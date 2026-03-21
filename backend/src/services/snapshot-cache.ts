@@ -1,9 +1,15 @@
 import { registry } from './camera-registry';
 import { httpGetBuffer } from '../utils/http-client';
+import { SnapshotsConfig } from '../config';
 
-const GO2RTC_API = process.env.GO2RTC_API || 'http://go2rtc:1984';
-const SNAPSHOT_INTERVAL = 30_000; // 30 seconds
-const FETCH_DELAY = 200;         // delay between sequential fetches (native is fast)
+let GO2RTC_API = 'http://go2rtc:1984';
+let config: SnapshotsConfig = {
+  enabled: true,
+  interval: 30,
+  source: 'auto',
+  delay: 200,
+  timeout: 8000,
+};
 
 /** In-memory cache: cameraId → { jpeg: Buffer, ts: number } */
 const cache = new Map<string, { jpeg: Buffer; ts: number }>();
@@ -23,14 +29,14 @@ async function fetchNativeSnapshot(cameraId: string): Promise<Buffer | null> {
   const url = entry.provider.getSnapshotUrl(entry.camera);
   if (!url) return null;
 
-  return httpGetBuffer(url, entry.provider.auth);
+  return httpGetBuffer(url, entry.provider.auth, config.timeout);
 }
 
 /** Fetch snapshot from go2rtc frame.jpeg API (slow: ~1-2s, needs keyframe). */
 async function fetchGo2rtcSnapshot(cameraId: string): Promise<Buffer | null> {
   const url = `${GO2RTC_API}/api/frame.jpeg?src=${encodeURIComponent(cameraId)}`;
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 8000);
+  const timer = setTimeout(() => controller.abort(), config.timeout);
 
   try {
     const res = await fetch(url, { signal: controller.signal });
@@ -51,37 +57,57 @@ async function refreshAll(): Promise<void> {
   let failed = 0;
 
   for (const id of ids) {
-    const nativeJpeg = await fetchNativeSnapshot(id);
-    if (nativeJpeg && nativeJpeg.length > 500) {
-      cache.set(id, { jpeg: nativeJpeg, ts: Date.now() });
-      native++;
-    } else {
-      const go2rtcJpeg = await fetchGo2rtcSnapshot(id);
-      if (go2rtcJpeg && go2rtcJpeg.length > 500) {
-        cache.set(id, { jpeg: go2rtcJpeg, ts: Date.now() });
-        fallback++;
-      } else {
-        failed++;
+    let jpeg: Buffer | null = null;
+
+    if (config.source === 'native' || config.source === 'auto') {
+      jpeg = await fetchNativeSnapshot(id);
+      if (jpeg && jpeg.length > 500) {
+        cache.set(id, { jpeg, ts: Date.now() });
+        native++;
+        await new Promise(r => setTimeout(r, config.delay));
+        continue;
       }
     }
 
-    await new Promise(r => setTimeout(r, FETCH_DELAY));
+    if (config.source === 'go2rtc' || config.source === 'auto') {
+      jpeg = await fetchGo2rtcSnapshot(id);
+      if (jpeg && jpeg.length > 500) {
+        cache.set(id, { jpeg, ts: Date.now() });
+        fallback++;
+        await new Promise(r => setTimeout(r, config.delay));
+        continue;
+      }
+    }
+
+    failed++;
+    await new Promise(r => setTimeout(r, config.delay));
   }
 
   const total = ids.length;
-  console.log(`[snapshot] Refreshed ${native + fallback}/${total} (${native} native, ${fallback} go2rtc, ${failed} failed)`);
+  const src = config.source === 'auto' ? `${native} native, ${fallback} go2rtc` :
+    config.source === 'native' ? `${native} native` : `${fallback} go2rtc`;
+  console.log(`[snapshot] Refreshed ${native + fallback}/${total} (${src}, ${failed} failed)`);
 }
 
 /** Start the background snapshot refresh loop. */
-export function startSnapshotCache(): void {
+export function startSnapshotCache(snapshotsConfig: SnapshotsConfig, go2rtcApi: string): void {
   if (running) return;
+  config = snapshotsConfig;
+  GO2RTC_API = go2rtcApi;
+
+  if (!config.enabled) {
+    console.log('[snapshot] Cache disabled in config');
+    return;
+  }
+
   running = true;
+  const intervalMs = config.interval * 1000;
 
   // First run after 5s (let go2rtc connect to cameras first)
   setTimeout(async () => {
     await refreshAll();
-    setInterval(() => refreshAll(), SNAPSHOT_INTERVAL);
+    setInterval(() => refreshAll(), intervalMs);
   }, 5000);
 
-  console.log(`[snapshot] Cache started (interval=${SNAPSHOT_INTERVAL / 1000}s, native+go2rtc fallback)`);
+  console.log(`[snapshot] Cache started (source=${config.source}, interval=${config.interval}s, delay=${config.delay}ms)`);
 }

@@ -11,12 +11,13 @@
  */
 
 import { CameraView } from './camera-view.js';
+import { CamPlayer } from './player.js';
 import {
   STAGGER_MS, BITRATE_INTERVAL_MS, BUFFER_SYNC_INTERVAL_MS,
   TIMELINE_RENDER_INTERVAL_MS, SWIPE_THRESHOLD_PX,
 } from './config.js';
 
-(window._oko = window._oko || {}).grid = 'g3a5';
+(window._oko = window._oko || {}).grid = 'g4a0';
 
 export class CameraGrid {
   /**
@@ -38,7 +39,6 @@ export class CameraGrid {
 
     // fullscreen state
     this._fullscreenCamera = null;
-    this._touchStartX = 0;
 
     // keyboard focus state
     this._focusedIndex = -1;
@@ -68,6 +68,62 @@ export class CameraGrid {
 
     this._bindSwipe();
     this._startPeriodicTasks();
+    this._initLazyLoad();
+  }
+
+  // ── Lazy loading ──
+
+  _initLazyLoad() {
+    // Lazy loading enabled on touch (mobile) or when MSE-only mode is active.
+    // In MSE mode, Chrome limits concurrent MediaSource instances (~6-16).
+    // Viewport management: start visible cameras, stop invisible ones.
+    this._pendingLazy = new Map(); // camId → CameraView
+
+    this._lazyObserver = new IntersectionObserver((entries) => {
+      for (const entry of entries) {
+        const id = entry.target.dataset.id;
+
+        if (entry.isIntersecting) {
+          // Camera became visible — start if pending
+          if (this._pendingLazy.has(id)) {
+            const cam = this._pendingLazy.get(id);
+            this._pendingLazy.delete(id);
+            cam.start();
+          }
+        } else if (this._mseLazy) {
+          // MSE mode: camera left viewport — disable to free MediaSource slot
+          const cam = this.cameras.find(c => c.id === id);
+          if (cam && cam.isEnabled && !cam.el.classList.contains('fullscreen')) {
+            cam.disable();
+            // Re-add to pending so it restarts when scrolled back
+            this._pendingLazy.set(id, cam);
+          }
+        }
+      }
+    }, { rootMargin: '200px' });
+  }
+
+  /** Whether lazy loading is active (mobile touch OR MSE-only mode). */
+  get _mseLazy() { return CamPlayer.globalForceMSE; }
+  get _lazyEnabled() {
+    return window.matchMedia('(pointer: coarse)').matches || this._mseLazy;
+  }
+
+  /** Register a camera element for lazy-load observation. */
+  _observeCamera(cam) {
+    if (this._lazyObserver) this._lazyObserver.observe(cam.el);
+  }
+
+  /** Schedule cam start: immediate (desktop/MSE) or deferred (mobile lazy). */
+  _scheduleStart(cam) {
+    // Mobile touch: defer to IntersectionObserver (cameras start when scrolled into view)
+    if (window.matchMedia('(pointer: coarse)').matches) {
+      this._pendingLazy.set(cam.id, cam);
+      return null;
+    }
+    // Desktop (including MSE mode): start immediately
+    // MSE pool handles concurrency limits internally
+    return cam;
   }
 
   // ── Public ──
@@ -108,6 +164,9 @@ export class CameraGrid {
       view.onConnectionError = (cam) => {
         if (this.onConnectionError) this.onConnectionError(cam);
       };
+      view.onStreamNotFound = (cam) => {
+        if (this.onStreamNotFound) this.onStreamNotFound(cam);
+      };
       view.onPlaybackPause = (cam) => {
         if (this.onPlaybackPause) this.onPlaybackPause(cam);
       };
@@ -120,6 +179,7 @@ export class CameraGrid {
 
       this.cameras.push(view);
       this.gridEl.appendChild(view.el);
+      this._observeCamera(view);
     }
 
     // discover unique groups — show filter only when 2+ groups
@@ -146,17 +206,20 @@ export class CameraGrid {
 
       if (shouldShow) {
         if (!cam.isEnabled) {
-          toStart.push(cam);
+          const scheduled = this._scheduleStart(cam);
+          if (scheduled) toStart.push(scheduled);
         } else if (cam.isEnabled && !cam.isConnected) {
           cam.player.stop();
-          toStart.push(cam);
+          const scheduled = this._scheduleStart(cam);
+          if (scheduled) toStart.push(scheduled);
         }
       } else if (cam.isEnabled) {
         cam.disable();
+        this._pendingLazy.delete(cam.id);
       }
     }
 
-    this._startSequential(toStart);
+    if (toStart.length > 0) this._startSequential(toStart);
     this._updateStats();
     if (this.autoFit) this._applyAutoFit();
   }
@@ -263,8 +326,10 @@ export class CameraGrid {
     if (!next) return;
 
     const prev = this._fullscreenCamera;
+    // Keep prev camera's zoom state (hidden but preserved)
+    prev.exitFullscreen({ keepZoom: true });
+    // Next camera enters with its own saved zoom (restored in enterFullscreen)
     next.enterFullscreen();
-    prev.exitFullscreen();
     this._fullscreenCamera = next;
     this._syncHash();
 
@@ -421,6 +486,17 @@ export class CameraGrid {
   enterInvestigationMode() {
     this._investigationMode = true;
     this.gridEl.classList.add('investigation-mode');
+
+    // Save current grid mode, switch to auto-fit for synced cameras
+    this._savedAutoFit = this.autoFit;
+    this._savedGridClass = [...this.gridEl.classList].find(c => c.startsWith('cols-')) || '';
+    this.autoFit = true;
+    // Remove manual cols class, add auto
+    for (const c of [...this.gridEl.classList]) {
+      if (c.startsWith('cols-')) this.gridEl.classList.remove(c);
+    }
+    this.gridEl.classList.add('cols-auto');
+
     for (const cam of this.cameras) {
       if (cam.isSelected) {
         cam.el.classList.add('cam-synced');
@@ -428,9 +504,9 @@ export class CameraGrid {
         cam.el.classList.add('inv-hidden');
       }
     }
-    if (this.autoFit) this._applyAutoFit();
+    this._applyAutoFit();
     this._updateStats();
-    console.log(`[grid] Investigation mode: ${this.selectedCameras.length} cameras`);
+    console.log(`[grid] Investigation mode: ${this.selectedCameras.length} cameras, auto-fit`);
   }
 
   exitInvestigationMode() {
@@ -441,8 +517,19 @@ export class CameraGrid {
       cam.el.classList.remove('cam-synced');
       cam.setSelected(false);
     }
+
+    // Restore grid mode
+    for (const c of [...this.gridEl.classList]) {
+      if (c.startsWith('cols-')) this.gridEl.classList.remove(c);
+    }
+    if (this._savedGridClass) {
+      this.gridEl.classList.add(this._savedGridClass);
+    }
+    this.autoFit = this._savedAutoFit ?? true;
+    if (this.autoFit) this._applyAutoFit();
+
     this._updateStats();
-    console.log('[grid] Investigation mode exited');
+    console.log('[grid] Investigation mode exited, grid restored');
   }
 
   clearSelection() {
@@ -500,8 +587,13 @@ export class CameraGrid {
   // ── Private: stats ──
 
   _updateStats() {
-    const nvrOffline = this.cameras.filter(c => c.el.classList.contains('nvr-offline')).length;
-    const active = this.cameras.filter(c => !c.el.classList.contains('nvr-offline'));
+    // In investigation mode, count only synced cameras
+    const pool = this._investigationMode
+      ? this.cameras.filter(c => c.isSelected)
+      : this.cameras;
+
+    const nvrOffline = pool.filter(c => c.el.classList.contains('nvr-offline')).length;
+    const active = pool.filter(c => !c.el.classList.contains('nvr-offline'));
     const online = active.filter(c => c.isConnected).length;
     const offline = active.filter(c => c.isEnabled && !c.isConnected).length + nvrOffline;
     if (this.onStatsChange) this.onStatsChange(online, offline);
@@ -527,20 +619,44 @@ export class CameraGrid {
     history.replaceState(null, '', url);
   }
 
-  // ── Private: swipe ──
+  // ── Private: touch gestures ──
 
   _bindSwipe() {
+    let startX = 0, startY = 0;
+    let gestureActive = false;
+
     document.addEventListener('touchstart', (e) => {
-      if (this._fullscreenCamera) {
-        this._touchStartX = e.touches[0].clientX;
-      }
+      if (!this._fullscreenCamera) return;
+      // Don't start swipe if pinching (2+ fingers) or if zoomed
+      if (e.touches.length > 1) return;
+      if (this._fullscreenCamera._zoom?.scale > 1) return;
+      startX = e.touches[0].clientX;
+      startY = e.touches[0].clientY;
+      gestureActive = true;
     }, { passive: true });
 
     document.addEventListener('touchend', (e) => {
-      if (!this._fullscreenCamera) return;
-      const dx = e.changedTouches[0].clientX - this._touchStartX;
-      if (Math.abs(dx) > SWIPE_THRESHOLD_PX) {
+      if (!this._fullscreenCamera || !gestureActive) return;
+      gestureActive = false;
+
+      const dx = e.changedTouches[0].clientX - startX;
+      const dy = e.changedTouches[0].clientY - startY;
+      const absDx = Math.abs(dx);
+      const absDy = Math.abs(dy);
+
+      // Determine dominant axis (must exceed threshold)
+      if (absDx < SWIPE_THRESHOLD_PX && absDy < SWIPE_THRESHOLD_PX) return;
+
+      if (absDx > absDy) {
+        // Horizontal swipe → navigate cameras
         this.navigateFullscreen(dx < 0 ? 1 : -1);
+      } else {
+        // Vertical swipe → exit fullscreen (down) or native fullscreen (up)
+        if (dy > 0) {
+          this.exitFullscreen();
+        } else {
+          this._fullscreenCamera.enterNativeFullscreen();
+        }
       }
     }, { passive: true });
 
@@ -555,7 +671,8 @@ export class CameraGrid {
 
   /**
    * Calculate optimal columns to fit all visible cameras on screen without scrolling.
-   * Finds minimum columns (= biggest cameras) that still fit vertically.
+   * Strategy: find fewest columns (= biggest cameras) that fit vertically,
+   * with a minimum cell width of 160px to keep cameras readable.
    */
   _applyAutoFit() {
     const count = this.visibleCameras.length;
@@ -566,10 +683,15 @@ export class CameraGrid {
     const availH = window.innerHeight - gridRect.top;
     const gap = 2;
     const aspect = 16 / 9;
+    const minCellW = 140; // minimum readable camera width
 
-    let bestCols = Math.ceil(Math.sqrt(count)); // fallback
+    // Maximum columns that respect minimum cell width
+    const maxCols = Math.max(1, Math.floor((availW + gap) / (minCellW + gap)));
 
-    for (let cols = 1; cols <= 20; cols++) {
+    let bestCols = Math.min(count, maxCols); // don't exceed camera count
+
+    // Find minimum cols where all cameras fit vertically
+    for (let cols = 1; cols <= maxCols; cols++) {
       const rows = Math.ceil(count / cols);
       const cellW = (availW - gap * (cols - 1)) / cols;
       const cellH = cellW / aspect;
@@ -577,7 +699,7 @@ export class CameraGrid {
 
       if (totalH <= availH) {
         bestCols = cols;
-        break; // first fit = minimum columns = biggest cameras
+        break;
       }
     }
 

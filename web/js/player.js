@@ -16,7 +16,7 @@ import {
   MSE_OPEN_TIMEOUT_MS, STALE_STREAM_MS, MSE_CACHE_TTL_MS,
 } from './config.js';
 
-(window._oko = window._oko || {}).player = 'p4b8';
+(window._oko = window._oko || {}).player = 'p6a0';
 
 export class CamPlayer {
   /**
@@ -83,6 +83,66 @@ export class CamPlayer {
     return streamName;
   }
 
+  /** Global MSE mode — disables WebRTC entirely. Set from config. */
+  static globalForceMSE = false;
+
+  // ── MSE Connection Pool ──
+  // Chrome limits concurrent MediaSource video buffer (~150MB shared).
+  // Pool ensures only MAX cameras connect simultaneously; rest wait in queue.
+  // Staggered start prevents burst memory pressure that evicts existing streams.
+  static _msePool = {
+    active: new Set(),
+    queue: [],
+    MAX: 75,             // Chrome desktop limit; 46 cameras fits fine
+    _flushTimer: null,
+    STAGGER_MS: 200,     // small stagger to avoid burst WS connections
+  };
+
+  /** Whether this player is waiting in MSE queue (not stuck — just waiting for slot). */
+  get isInMseQueue() {
+    return CamPlayer._msePool.queue.indexOf(this) >= 0;
+  }
+
+  /** Request an MSE slot. */
+  static _mseEnqueue(player) {
+    const pool = CamPlayer._msePool;
+    if (pool.active.has(player)) return;
+    if (pool.queue.indexOf(player) >= 0) return;
+    pool.queue.push(player);
+    player._emitStage('mse queued');
+    CamPlayer._mseFlush();
+  }
+
+  /** Release MSE slot. */
+  static _mseRelease(player) {
+    const pool = CamPlayer._msePool;
+    const wasActive = pool.active.delete(player);
+    const idx = pool.queue.indexOf(player);
+    if (idx >= 0) pool.queue.splice(idx, 1);
+    if (wasActive) CamPlayer._mseFlush();
+  }
+
+  /** Start ONE queued player if slot available, schedule next with stagger. */
+  static _mseFlush() {
+    const pool = CamPlayer._msePool;
+    clearTimeout(pool._flushTimer);
+    if (pool.active.size >= pool.MAX || pool.queue.length === 0) return;
+
+    // Start one player
+    while (pool.queue.length > 0) {
+      const player = pool.queue.shift();
+      if (!player.enabled) continue;
+      pool.active.add(player);
+      player._doConnectMSE();
+      break;
+    }
+
+    // Schedule next with stagger delay
+    if (pool.active.size < pool.MAX && pool.queue.length > 0) {
+      pool._flushTimer = setTimeout(() => CamPlayer._mseFlush(), pool.STAGGER_MS);
+    }
+  }
+
   /** @param {HTMLVideoElement} video  @param {string} name - stream ID  @param {Object} [opts] */
   constructor(video, name, opts = {}) {
     this.video = video;
@@ -126,6 +186,7 @@ export class CamPlayer {
     this.onNeedTranscode = null; // (streamName: string) => void
     this.onStage = null;         // (stage: string) => void — loading stage updates
     this.onConnectionError = null; // (streamName: string) => void — NVR unreachable
+    this.onStreamNotFound = null;  // (streamName: string) => void — go2rtc lost stream
   }
 
   /** Elapsed ms since connect start, formatted. */
@@ -137,6 +198,13 @@ export class CamPlayer {
 
   start() {
     this.enabled = true;
+
+    // Global MSE mode — skip WebRTC entirely
+    if (CamPlayer.globalForceMSE) {
+      this._connectMSE();
+      return;
+    }
+
     if (this._codecMismatch) {
       this._connectMSE();
     } else {
@@ -162,6 +230,7 @@ export class CamPlayer {
 
   disable() {
     this.enabled = false;
+    CamPlayer._mseRelease(this); // release pool slot + remove from queue
     this.stop();
     this._emitStatus(false);
   }
@@ -173,7 +242,9 @@ export class CamPlayer {
     this._videoDecodeAttempts = 0;
     this._closePeerConnection();
     this._closeWebSocket();
-    this._resetVideo();
+    // Revoke old blob URL to prevent ERR_FILE_NOT_FOUND on orphaned MediaSource
+    if (this._blobUrl) { URL.revokeObjectURL(this._blobUrl); this._blobUrl = null; }
+    // NOTE: deliberately does NOT reset video.src — CameraView owns video lifecycle
     this.mediaSource = null;
     this.sourceBuffer = null;
     this.bufferQueue = [];
@@ -182,6 +253,8 @@ export class CamPlayer {
     this.bitrate = 0;
     this._lastBytesGrowth = 0;
     this._webrtcRetried = false;
+    // Don't release pool here — _doConnectMSE calls stop() before reconnecting
+    // Pool release happens in disable() and detach handler
   }
 
   /** Measure current bitrate and detect stale streams. Call periodically. */
@@ -230,7 +303,7 @@ export class CamPlayer {
   _reconnect() {
     if (!this.enabled) return;
     this._emitStatus(false);
-    if (this._codecMismatch || this.mode === 'mse') {
+    if (CamPlayer.globalForceMSE || this._codecMismatch || this.mode === 'mse') {
       this._connectMSE();
     } else {
       this._connectWebRTC();
@@ -240,8 +313,8 @@ export class CamPlayer {
   // ── WebRTC ──
 
   async _connectWebRTC() {
-    this.stop();
     if (!this.enabled) return;
+    this.stop();
 
     this._connectStartTime = Date.now();
     console.log(`[player] ${this.name}: connecting WebRTC...`);
@@ -265,6 +338,17 @@ export class CamPlayer {
 
       if (!response.ok) {
         const errorText = await response.text().catch(() => '');
+
+        // Stream not found in go2rtc — needs recovery
+        if (response.status === 500 && (errorText.includes('not found') || errorText.includes('no source'))) {
+          console.warn(`[player] ${this.name}: stream not found in go2rtc${this._elapsed()}`);
+          this._closePeerConnection();
+          this._emitStage('stream lost');
+          this._emitStatus(false);
+          if (this.onStreamNotFound) this.onStreamNotFound(this.name);
+          return;
+        }
+
         // Codec mismatch (e.g. H.265 source, no H.265 WebRTC)
         if (errorText.includes('codecs not matched')) {
           this._codecMismatch = true;
@@ -302,7 +386,7 @@ export class CamPlayer {
         if (!this._webrtcRetried) {
           this._webrtcRetried = true;
           this._closePeerConnection();
-          setTimeout(() => this._connectWebRTC(), WEBRTC_RETRY_MS);
+          this._retryTimer = setTimeout(() => this._connectWebRTC(), WEBRTC_RETRY_MS);
           return;
         }
         this._webrtcRetried = false;
@@ -345,6 +429,7 @@ export class CamPlayer {
 
   _setupPeerConnectionHandlers() {
     this.pc.ontrack = (event) => {
+      if (!this.enabled) return;
       console.log(`[player] ${this.name}: ontrack kind=${event.track.kind}${this._elapsed()}`);
 
       if (event.track.kind === 'audio' && this.onAudioTrack) {
@@ -352,6 +437,8 @@ export class CamPlayer {
       }
       if (event.streams?.[0]) {
         this.video.srcObject = event.streams[0];
+        // Must be muted for autoplay policy — user can unmute via audio toggle
+        this.video.muted = true;
         this.video.play().catch(() => {});
         clearTimeout(this._iceTimeout);
         this._emitStatus(true);
@@ -451,13 +538,35 @@ export class CamPlayer {
 
   // ── MSE (fallback) ──
 
+  /** Request MSE connection — goes through the pool queue. */
   _connectMSE() {
-    this.stop();
     if (!this.enabled) return;
+
+    this._mseConsecutiveFailures = (this._mseConsecutiveFailures || 0);
+
+    // If MSE keeps failing and WebRTC is available, fall back to it
+    // (but not when globalForceMSE — MSE is the only option)
+    if (!CamPlayer.globalForceMSE && this._mseConsecutiveFailures >= 3 && CamPlayer.h265WebRTCSupported) {
+      console.log(`[player] ${this.name}: MSE failed ${this._mseConsecutiveFailures}× — falling back to WebRTC`);
+      this._mseConsecutiveFailures = 0;
+      this._codecMismatch = false;
+      this._connectWebRTC();
+      return;
+    }
+
+    CamPlayer._mseEnqueue(this);
+  }
+
+  /** Actually connect MSE — called by pool when a slot is available. */
+  _doConnectMSE() {
+    if (!this.enabled) { CamPlayer._mseRelease(this); return; }
+    this.stop();  // clean up any previous connection (but don't release pool slot)
 
     this._connectStartTime = Date.now();
     this._mseFirstData = false;
-    console.log(`[player] ${this.name}: connecting MSE...`);
+
+    const pool = CamPlayer._msePool;
+    console.log(`[player] ${this.name}: connecting MSE (pool: ${pool.active.size}/${pool.MAX}, queue: ${pool.queue.length})${this._mseConsecutiveFailures > 0 ? ` attempt ${this._mseConsecutiveFailures + 1}` : ''}`);
     this.mode = 'mse';
     this._emitMode('mse');
     this._emitStage('mse connecting');
@@ -471,12 +580,14 @@ export class CamPlayer {
       this.ws.binaryType = 'arraybuffer';
 
       this.ws.onopen = () => {
+        if (!this.enabled) { this._closeWebSocket(); return; }
         console.log(`[player] ${this.name}: WS open${this._elapsed()}`);
         this._emitStage('mse buffering');
         this.ws.send(JSON.stringify({ type: 'mse', value: '' }));
       };
 
       this.ws.onmessage = (event) => {
+        if (!this.enabled) return; // guard: player disabled during WS delivery
         if (typeof event.data === 'string') {
           const msg = JSON.parse(event.data);
           if (msg.type === 'mse') {
@@ -499,16 +610,20 @@ export class CamPlayer {
       this.ws.onclose = (e) => {
         console.log(`[player] ${this.name}: WS close (code=${e.code})`);
         this._emitStatus(false);
+        CamPlayer._mseRelease(this);
         this._scheduleRetry();
       };
     } catch (err) {
       console.log(`[player] ${this.name}: MSE connect error: ${err.message}`);
       this._emitStatus(false);
+      CamPlayer._mseRelease(this);
       this._scheduleRetry();
     }
   }
 
   _initMediaSource(mimeType) {
+    if (!this.enabled) return; // player disabled between WS message and this call
+
     // Check if browser supports this codec before trying
     if (!MediaSource.isTypeSupported(mimeType)) {
       console.log(`[player] ${this.name}: MSE codec not supported: ${mimeType}`);
@@ -522,17 +637,22 @@ export class CamPlayer {
     }
 
     this.mediaSource = new MediaSource();
-    this.video.src = URL.createObjectURL(this.mediaSource);
+    // Clear any stale WebRTC srcObject — srcObject takes priority over src per spec.
+    this.video.srcObject = null;
+    this._blobUrl = URL.createObjectURL(this.mediaSource);
+    this.video.src = this._blobUrl;
     this.bufferQueue = [];
     this.sourceBuffer = null;
 
     this.mediaSource.addEventListener('sourceopen', () => {
+      if (!this.enabled || !this.mediaSource) return; // stale event
       try {
         console.log(`[player] ${this.name}: sourceopen${this._elapsed()}`);
         this.sourceBuffer = this.mediaSource.addSourceBuffer(mimeType);
         this.sourceBuffer.mode = 'segments';
 
         this.sourceBuffer.addEventListener('updateend', () => {
+          if (!this.enabled || !this.sourceBuffer) return;
           this._trimBuffer();
           this._flushBufferQueue();
         });
@@ -556,21 +676,22 @@ export class CamPlayer {
       }
     }, { once: true });
 
-    this.video.play().then(() => {
-      console.log(`[player] ${this.name}: MSE video.play() ok${this._elapsed()}`);
-    }).catch((e) => {
-      console.warn(`[player] ${this.name}: MSE video.play() rejected: ${e.message}${this._elapsed()}`);
-    });
+    // play() MUST be called right after setting video.src — Chrome holds the
+    // promise in pending state until data arrives via appendBuffer. Moving it
+    // to updateend causes Chrome to evaluate the empty buffer → "no source" → fail.
+    this.video.muted = true;
+    this.video.play().catch(() => {}); // rejection is non-fatal — muted satisfies autoplay
   }
 
   _appendToBuffer(data) {
+    if (!this.enabled) return;
     this.bufferQueue.push(data);
-    this._flushBufferQueue();
+    if (this.sourceBuffer) this._flushBufferQueue(); // flush only when ready
   }
 
   _flushBufferQueue() {
     const sb = this.sourceBuffer;
-    if (!sb || sb.updating || this.bufferQueue.length === 0) return;
+    if (!sb || !this.enabled || sb.updating || this.bufferQueue.length === 0) return;
 
     const totalSize = this.bufferQueue.reduce((sum, buf) => sum + buf.byteLength, 0);
     const merged = new Uint8Array(totalSize);
@@ -584,23 +705,38 @@ export class CamPlayer {
     try {
       sb.appendBuffer(merged);
     } catch (err) {
-      console.warn(`[player] ${this.name}: appendBuffer error: ${err.message} (${merged.byteLength}b, queue=${this.bufferQueue.length})`);
-      // quota exceeded — reconnect
-      setTimeout(() => this._connectMSE(), MSE_OPEN_TIMEOUT_MS);
+      if (!this.enabled) return;
+      // SourceBuffer detached (video.src changed, or MediaSource closed)
+      if (err.name === 'InvalidStateError' || err.message?.includes('removed from the parent')) {
+        this._mseConsecutiveFailures = (this._mseConsecutiveFailures || 0) + 1;
+        console.log(`[player] ${this.name}: SourceBuffer detached (failure #${this._mseConsecutiveFailures}), reconnecting`);
+        this._closeWebSocket();
+        this.sourceBuffer = null;
+        this.mediaSource = null;
+        this.connected = false;
+        this._emitStatus(false);
+        CamPlayer._mseRelease(this);
+        this._scheduleRetry(); // uses delay timer, then re-enqueues
+        return;
+      }
+      // Quota exceeded or other → reconnect
+      console.warn(`[player] ${this.name}: appendBuffer error: ${err.message} (${merged.byteLength}b)`);
+      CamPlayer._mseRelease(this);
+      this._scheduleRetry();
     }
   }
 
   _trimBuffer() {
-    const sb = this.sourceBuffer;
-    if (!sb || sb.updating || sb.buffered.length === 0) return;
+    try {
+      const sb = this.sourceBuffer;
+      if (!sb || sb.updating || sb.buffered.length === 0) return;
 
-    const start = sb.buffered.start(0);
-    const end = sb.buffered.end(0);
-    if (end - start > BUFFER_MAX_SECONDS) {
-      try {
+      const start = sb.buffered.start(0);
+      const end = sb.buffered.end(0);
+      if (end - start > BUFFER_MAX_SECONDS) {
         sb.remove(start, end - BUFFER_TRIM_TO);
-      } catch (err) { /* ignore */ }
-    }
+      }
+    } catch { /* SourceBuffer may be detached — safe to ignore */ }
   }
 
   // ── Bitrate measurement ──
@@ -645,16 +781,21 @@ export class CamPlayer {
     if (!this.enabled) return;
 
     clearTimeout(this._retryTimer);
-
-    // Always MSE if codec mismatch was detected
-    const useMSE = this.mode === 'mse' || this._codecMismatch;
-    const reconnect = useMSE
-      ? () => this._connectMSE()
-      : () => this._connectWebRTC();
-
-    console.log(`[player] ${this.name}: retry in ${this.retryDelay}ms (${useMSE ? 'MSE' : 'WebRTC'})`);
     this._emitStage('reconnecting');
-    this._retryTimer = setTimeout(reconnect, this.retryDelay);
+
+    const useMSE = CamPlayer.globalForceMSE || this.mode === 'mse' || this._codecMismatch;
+    const delay = this.retryDelay;
+
+    console.log(`[player] ${this.name}: retry in ${delay}ms (${useMSE ? 'MSE' : 'WebRTC'})`);
+
+    this._retryTimer = setTimeout(() => {
+      if (!this.enabled) return;
+      if (useMSE) {
+        CamPlayer._mseEnqueue(this);
+      } else {
+        this._connectWebRTC();
+      }
+    }, delay);
 
     if (this.retryDelay < RETRY_MAX_MS) {
       this.retryDelay = Math.min(this.retryDelay + 2000, RETRY_MAX_MS);
@@ -674,16 +815,13 @@ export class CamPlayer {
 
   _closeWebSocket() {
     if (this.ws) {
+      this.ws.onopen = null;
+      this.ws.onmessage = null;
+      this.ws.onerror = null;
       this.ws.onclose = null;
       this.ws.close();
       this.ws = null;
     }
-  }
-
-  _resetVideo() {
-    this.video.srcObject = null;
-    this.video.src = '';
-    this.video.load();
   }
 
   // ── Event emitters ──

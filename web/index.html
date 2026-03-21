@@ -2,7 +2,11 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="theme-color" content="#0a0a0c">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <link rel="manifest" href="/manifest.json">
   <title>OKO NVR PLAYER</title>
   <link rel="stylesheet" href="css/styles.css">
 </head>
@@ -29,6 +33,8 @@
     </div>
   </header>
 
+  <div class="server-activity-bar" id="server-activity"></div>
+
   <nav class="controls" id="controls">
     <span class="controls-label">Grid:</span>
     <button class="ctrl-btn grid-btn grid-btn-auto active" data-cols="auto" title="Auto-fit all cameras to screen (Ctrl+`)">Auto</button>
@@ -36,13 +42,6 @@
     <button class="ctrl-btn grid-btn" data-cols="2" title="2 cameras per row (Ctrl+2)">2&times;</button>
     <button class="ctrl-btn grid-btn" data-cols="4" title="4 cameras per row (Ctrl+3)">4&times;</button>
     <button class="ctrl-btn grid-btn" data-cols="6" title="6 cameras per row (Ctrl+4)">6&times;</button>
-
-    <div class="controls-sep"></div>
-
-    <span class="controls-label">Show:</span>
-    <button class="ctrl-btn filter-btn active" data-filter="all" title="Show all cameras">All</button>
-    <button class="ctrl-btn filter-btn" data-filter="online" title="Show only connected cameras">Online</button>
-    <button class="ctrl-btn filter-btn" data-filter="offline" title="Show only disconnected cameras">Offline</button>
 
     <div class="controls-sep"></div>
 

@@ -4,17 +4,20 @@ import { checkHealth, cleanupSessionStreams, ensureBaseStreams } from '../servic
 import { clearCodecCache } from '../services/codec-prober';
 import { getUiConfig } from '../services/config-store';
 import { getNvrStatuses } from '../services/nvr-health';
+import { getActivities } from '../services/server-activity';
 import { registry } from '../services/camera-registry';
 
 export async function healthRoutes(fastify: FastifyInstance) {
   fastify.get('/health', async () => {
     const go2rtcOk = await checkHealth();
     const cameras = (stmts.getAll.all() as any[]).length;
+    const activities = getActivities();
     return {
       status: 'ok',
       version: '0.1.0',
       go2rtc: go2rtcOk ? 'connected' : 'unreachable',
       cameras,
+      activities,
     };
   });
 

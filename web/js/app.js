@@ -17,7 +17,7 @@ import { CamPlayer } from './player.js';
 import { NotificationManager } from './notifications.js';
 import { SEARCH_DEBOUNCE_MS, VERSION } from './config.js';
 
-(window._oko = window._oko || {}).app = 'a6c8';
+(window._oko = window._oko || {}).app = 'a7a4';
 
 export class App {
   constructor() {
@@ -48,7 +48,7 @@ export class App {
 
     // Log config from server
     const sc = this._uiConfig;
-    console.log(`[config] title="${sc.title}" snapshots=${sc.snapshots_enabled !== false} mse_cache_ttl=${sc.mse_cache_ttl ?? 60}s force_mse=${sc.playback_force_mse !== false}`);
+    console.log(`[config] title="${sc.title}" snapshots=${sc.snapshots_enabled !== false} mse_cache_ttl=${sc.mse_cache_ttl ?? 60}s force_mse=${!!sc.playback_force_mse}`);
 
     this.notifications.requestPermission();
 
@@ -117,6 +117,10 @@ export class App {
     // Server stats to devtools console
     this._logServerStats(); // first call immediately
     this._statsInterval = setInterval(() => this._logServerStats(), 10000);
+
+    // Also poll activities more frequently during startup (every 3s for first 2 minutes)
+    this._activityFastPoll = setInterval(() => this._pollActivities(), 3000);
+    setTimeout(() => clearInterval(this._activityFastPoll), 120000);
   }
 
   /** Fetch and log server stats to browser console. */
@@ -153,6 +157,37 @@ export class App {
     } catch (err) {
       console.warn('[server] stats failed:', err.message);
     }
+
+    // Poll server activities
+    this._pollActivities();
+  }
+
+  async _pollActivities() {
+    try {
+      const h = await this.api.health();
+      const acts = h.activities || {};
+      const bar = document.getElementById('server-activity');
+      if (!bar) return;
+
+      const keys = Object.keys(acts);
+      if (keys.length === 0) {
+        bar.classList.remove('visible');
+        bar.innerHTML = '';
+        return;
+      }
+
+      bar.innerHTML = keys.map(name => {
+        const a = acts[name];
+        const progress = a.progress ? `<span class="activity-progress">${a.progress}</span>` : '';
+        const elapsed = a.elapsed > 2 ? `<span class="activity-elapsed">${a.elapsed}s</span>` : '';
+        return `<div class="server-activity-item">
+          <div class="activity-spinner"></div>
+          <span>${a.status}</span>
+          ${progress}${elapsed}
+        </div>`;
+      }).join('');
+      bar.classList.add('visible');
+    } catch {}
   }
 
   /** Apply UI settings from oko.yaml. localStorage overrides config. */
@@ -196,13 +231,15 @@ export class App {
       bitrate_interval: c.bitrate_interval || 5000,
       snapshots_enabled: c.snapshots_enabled !== false,
       mse_cache_ttl: (c.mse_cache_ttl || 60) * 1000,
-      playback_force_mse: c.playback_force_mse !== false,
     };
 
     // Apply MSE cache TTL from server config
     if (c.mse_cache_ttl != null) {
       CamPlayer.MSE_CACHE_TTL = c.mse_cache_ttl * 1000;
     }
+
+    // Global force MSE — disables WebRTC entirely
+    CamPlayer.globalForceMSE = !!c.playback_force_mse;
   }
 
   /** Sync UI config changes from hot reload (only updates what changed). */
@@ -227,8 +264,10 @@ export class App {
       bitrate_interval: newUi.bitrate_interval || 5000,
       snapshots_enabled: newUi.snapshots_enabled !== false,
       mse_cache_ttl: (newUi.mse_cache_ttl || 60) * 1000,
-      playback_force_mse: newUi.playback_force_mse !== false,
     };
+
+    // Global force MSE — hot-reloadable
+    CamPlayer.globalForceMSE = !!newUi.playback_force_mse;
   }
 
   /** Apply NVR health status to cameras and NVR buttons. */
@@ -305,7 +344,10 @@ export class App {
       } else if (!isOffline && !cam.player.connected && cam.player.enabled
         && !cam.el.classList.contains('hidden')
         && !cam.el.classList.contains('playback-mode')
-        && !cam.isHd) {
+        && !cam.isHd
+        && !cam.player.isInMseQueue   // waiting for MSE slot — not stuck
+        && !CamPlayer._msePool.active.has(cam.player)  // connecting MSE — not stuck
+        && !cam.player._retryTimer) {  // has pending retry — not stuck
         // Stuck camera: enabled but not connected, NVR is online
         // Skip cameras in playback/HD mode — their SD player is intentionally stopped
         toRestart.push(cam);
@@ -340,7 +382,17 @@ export class App {
       console.error('Failed to load cameras:', err);
       document.getElementById('grid').innerHTML =
         '<div style="padding:40px;text-align:center;color:var(--text-dim);font-family:var(--mono)">'
-        + 'No cameras found. Check backend connection.</div>';
+        + 'Cannot reach backend. Check connection.</div>';
+      return;
+    }
+
+    if (configs.length === 0) {
+      document.getElementById('grid').innerHTML =
+        '<div style="padding:40px;text-align:center;color:var(--text-dim);font-family:var(--mono)">'
+        + 'No cameras found. Waiting for NVR discovery...<br>'
+        + '<span style="font-size:10px;opacity:0.5">Will auto-refresh when cameras appear</span></div>';
+      // Retry in 10s — NVR might still be booting
+      setTimeout(() => this._loadCameras(), 10000);
       return;
     }
 
@@ -382,6 +434,8 @@ export class App {
         const pad = (n) => String(n).padStart(2, '0');
         const fmt = (d) => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
         await this._startPlayback(cam, fmt(seekTime), fmt(endOfDay), resolution);
+        // Deep link: no prior user interaction → pause and wait for click to unmute
+        cam.awaitUserPlay();
       }, 1500);
     }
   }
@@ -739,20 +793,52 @@ export class App {
 
         if (!isActive) {
           btn.classList.add('active');
-          this.grid.groupFilter = group;
           // Fill with group color when active
           if (colorMap && colorMap.has(group)) {
             btn.style.background = colorMap.get(group).bright;
             btn.style.color = '#fff';
           }
-        } else {
-          this.grid.groupFilter = '';
         }
+
+        // Investigation mode: just toggle visibility of synced cameras (no stream start/stop)
+        if (this.grid._investigationMode) {
+          const filterGroup = isActive ? '' : group;
+          for (const cam of this.grid.cameras) {
+            if (cam.isSelected) {
+              // synced camera: show/hide based on group filter
+              const visible = !filterGroup || cam.group === filterGroup;
+              cam.el.classList.toggle('inv-hidden', !visible);
+            }
+            // non-selected stay hidden
+          }
+          if (this.grid.autoFit) this.grid._applyAutoFit();
+          return;
+        }
+
+        // Normal mode: full filter with stream start/stop
+        this.grid.groupFilter = isActive ? '' : group;
         this.grid.applyFilters();
       });
 
       controls.insertBefore(btn, searchWrap);
     }
+  }
+
+  /** Update NVR button camera counts. In investigation mode: only synced cameras. */
+  _updateGroupCounts() {
+    document.querySelectorAll('.group-btn').forEach(btn => {
+      const group = btn.dataset.group;
+      const countEl = btn.querySelector('.nvr-count');
+      if (!countEl) return;
+
+      let count;
+      if (this.grid._investigationMode) {
+        count = this.grid.cameras.filter(c => c.group === group && c.isSelected).length;
+      } else {
+        count = this.grid.cameras.filter(c => c.group === group).length;
+      }
+      countEl.textContent = String(count);
+    });
   }
 
   // ── Control pending highlights ──
@@ -800,11 +886,14 @@ export class App {
 
   _bindKeyboard() {
     document.addEventListener('keydown', (e) => {
-      // ignore when typing in search
-      if (e.target.tagName === 'INPUT') return;
+      // ignore when typing in search or input
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
 
-      // Ctrl+` → auto grid
-      if (e.ctrlKey && (e.key === '`' || e.key === '~')) {
+      // e.code = physical key (layout-independent, CapsLock-independent)
+      const code = e.code;
+
+      // Ctrl+Backquote → auto grid
+      if (e.ctrlKey && code === 'Backquote') {
         e.preventDefault();
         const btn = document.querySelector('.grid-btn-auto');
         if (btn) {
@@ -815,10 +904,10 @@ export class App {
       }
 
       // Ctrl+1-6 → grid size
-      if (e.ctrlKey && e.key >= '1' && e.key <= '6') {
+      if (e.ctrlKey && code >= 'Digit1' && code <= 'Digit6') {
         e.preventDefault();
-        const gridMap = { '1': 1, '2': 2, '3': 4, '4': 6, '5': 8, '6': 10 };
-        const cols = gridMap[e.key];
+        const gridMap = { Digit1: 1, Digit2: 2, Digit3: 4, Digit4: 6, Digit5: 8, Digit6: 10 };
+        const cols = gridMap[code];
         const btn = document.querySelector(`.grid-btn[data-cols="${cols}"]`);
         if (btn) {
           btn.click();
@@ -828,7 +917,7 @@ export class App {
       }
 
       // Esc → exit fullscreen, then investigation mode
-      if (e.key === 'Escape') {
+      if (code === 'Escape') {
         if (this.grid.fullscreenCamera) {
           this.grid.exitFullscreen();
         } else if (this.grid._investigationMode) {
@@ -840,7 +929,7 @@ export class App {
       }
 
       // R → refresh
-      if ((e.key === 'r' || e.key === 'R') && !e.ctrlKey && !e.metaKey) {
+      if (code === 'KeyR' && !e.ctrlKey && !e.metaKey) {
         e.preventDefault();
         this._clearControlPending();
         this.grid.refresh();
@@ -849,7 +938,7 @@ export class App {
       }
 
       // C → compact mode (not Ctrl+C)
-      if ((e.key === 'c' || e.key === 'C') && !e.ctrlKey && !e.metaKey) {
+      if (code === 'KeyC' && !e.ctrlKey && !e.metaKey) {
         document.getElementById('compact-btn').click();
         if (!document.body.classList.contains('compact-mode')) {
           this._showHint('Compact OFF');
@@ -858,13 +947,13 @@ export class App {
       }
 
       // T → toggle theme
-      if ((e.key === 't' || e.key === 'T') && !e.ctrlKey && !e.metaKey) {
+      if (code === 'KeyT' && !e.ctrlKey && !e.metaKey) {
         document.getElementById('theme-btn').click();
         return;
       }
 
       // M → mute/unmute
-      if ((e.key === 'm' || e.key === 'M') && !e.ctrlKey && !e.metaKey) {
+      if (code === 'KeyM' && !e.ctrlKey && !e.metaKey) {
         CameraView.globalMute = !CameraView.globalMute;
         const muted = CameraView.globalMute;
 
@@ -888,7 +977,7 @@ export class App {
       }
 
       // F → native browser fullscreen (anywhere)
-      if ((e.key === 'f' || e.key === 'F') && !e.ctrlKey && !e.metaKey) {
+      if (code === 'KeyF' && !e.ctrlKey && !e.metaKey) {
         e.preventDefault();
         if (document.fullscreenElement) {
           document.exitFullscreen().catch(() => {});
@@ -902,54 +991,148 @@ export class App {
 
       // fullscreen-only shortcuts
       if (this.grid.fullscreenCamera) {
-        if (e.key === 'ArrowRight') { e.preventDefault(); this.grid.navigateFullscreen(1); return; }
-        if (e.key === 'ArrowLeft') { e.preventDefault(); this.grid.navigateFullscreen(-1); return; }
-        if (e.key === 'Enter') { e.preventDefault(); this.grid.exitFullscreen(); return; }
-        if (e.key === ' ') {
+        const cam = this.grid.fullscreenCamera;
+
+        // ←→ always navigate cameras
+        if (code === 'ArrowRight') { e.preventDefault(); this.grid.navigateFullscreen(1); return; }
+        if (code === 'ArrowLeft') { e.preventDefault(); this.grid.navigateFullscreen(-1); return; }
+
+        // J/K = seek ±30s (archive), Shift+J/K = ±5m, J from LIVE → start archive
+        if ((code === 'KeyJ' || code === 'KeyK') && !e.ctrlKey) {
           e.preventDefault();
-          this.grid.fullscreenCamera.togglePause();
+          const isBack = code === 'KeyJ';
+          const delta = e.shiftKey ? 300000 : 30000;
+
+          if (cam.isPlayback) {
+            const pos = cam.playbackPosition;
+            if (pos) {
+              const seekTime = new Date(pos.getTime() + (isBack ? -delta : delta));
+              this._seekPlayback(cam, seekTime);
+              if (this.grid._investigationMode) this._syncSeekToSelected(cam, seekTime);
+              this._showHint(`${isBack ? '-' : '+'}${e.shiftKey ? '5m' : '30s'}`);
+            }
+          } else {
+            // LIVE → start archive at now - delta
+            const seekTime = new Date(Date.now() - delta);
+            const pad = (n) => String(n).padStart(2, '0');
+            const fmt = (d) => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+            const endOfDay = new Date(seekTime); endOfDay.setHours(23, 59, 59, 0);
+            this._startPlayback(cam, fmt(seekTime), fmt(endOfDay), 'original');
+            if (this.grid._investigationMode) this._syncStartToSelected(cam, fmt(seekTime), fmt(endOfDay), 'original');
+            this._showHint(`Archive -${e.shiftKey ? '5m' : '30s'}`);
+          }
           return;
         }
-        if ((e.key === 'h' || e.key === 'H') && !e.ctrlKey && !e.metaKey) {
-          const cam = this.grid.fullscreenCamera;
+
+        if (code === 'Enter') { e.preventDefault(); this.grid.exitFullscreen(); return; }
+
+        // Space = pause/resume
+        if (code === 'Space') {
+          e.preventDefault();
+          cam.togglePause();
+          return;
+        }
+
+        // ↑↓ volume
+        if (code === 'ArrowUp' || code === 'ArrowDown') {
+          e.preventDefault();
+          const v = cam.video;
+          v.volume = Math.max(0, Math.min(1, v.volume + (code === 'ArrowUp' ? 0.1 : -0.1)));
+          if (v.muted && code === 'ArrowUp') { v.muted = false; cam._audioIcon.classList.add('unmuted'); }
+          this._showHint(`Vol ${Math.round(v.volume * 100)}%`);
+          return;
+        }
+
+        // L = toggle LIVE
+        if (code === 'KeyL' && !e.ctrlKey) {
+          if (cam.isPlayback) {
+            this._stopPlayback(cam);
+            if (this.grid._investigationMode) this._syncLiveToSelected(cam);
+            this._showHint(`${cam.id} → LIVE`);
+          } else {
+            cam.togglePlaybackPanel();
+          }
+          return;
+        }
+
+        // H = HD toggle
+        if (code === 'KeyH' && !e.ctrlKey && !e.metaKey) {
           if (!cam.isPlayback) this._toggleHd(cam, !cam.isHd);
           return;
         }
-        if ((e.key === 'p' || e.key === 'P') && !e.ctrlKey && !e.metaKey) {
-          this.grid.fullscreenCamera.togglePlaybackPanel();
+
+        // P = playback panel
+        if (code === 'KeyP' && !e.ctrlKey && !e.metaKey) {
+          cam.togglePlaybackPanel();
           return;
         }
+
+        // Z = reset zoom
+        if (code === 'KeyZ' && !e.ctrlKey) {
+          cam._resetZoom();
+          this._showHint('Zoom 1×');
+          return;
+        }
+
+        // 1-4 = zoom presets
+        if (!e.ctrlKey && !e.metaKey) {
+          const zoomMap = { Digit1: 1, Digit2: 2, Digit3: 3, Digit4: 4 };
+          if (zoomMap[code]) {
+            const rect = cam.el.getBoundingClientRect();
+            cam._setZoom(zoomMap[code], rect.width / 2, rect.height / 2);
+            this._showHint(`Zoom ${zoomMap[code]}×`);
+            return;
+          }
+        }
+
+        // ? or / = keyboard help overlay
+        if (code === 'Slash') {
+          e.preventDefault();
+          this._toggleKeyboardHelp();
+          return;
+        }
+
         return; // don't process grid navigation while in fullscreen
       }
 
       // ── Grid keyboard navigation (no camera open) ──
 
       // Arrow keys → move focus
-      if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key)) {
+      if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(code)) {
         e.preventDefault();
         const dirMap = { ArrowLeft: 'left', ArrowRight: 'right', ArrowUp: 'up', ArrowDown: 'down' };
-        this.grid.moveFocus(dirMap[e.key]);
+        this.grid.moveFocus(dirMap[code]);
         return;
       }
 
       // Space → toggle selection on focused camera
-      if (e.key === ' ' && this.grid.focusedCamera) {
+      if (code === 'Space' && this.grid.focusedCamera) {
         e.preventDefault();
         this.grid.focusedCamera.toggleSelect();
         return;
       }
 
       // Enter → open focused camera
-      if (e.key === 'Enter' && this.grid.focusedCamera) {
+      if (code === 'Enter' && this.grid.focusedCamera) {
         e.preventDefault();
         this.grid.openFocused();
         return;
       }
 
       // 1-9 → open camera by index
-      const num = parseInt(e.key);
-      if (num >= 1 && num <= 9) {
-        this.grid.openByIndex(num - 1);
+      const digitMatch = code.match(/^Digit(\d)$/);
+      if (digitMatch) {
+        const num = parseInt(digitMatch[1]);
+        if (num >= 1 && num <= 9) {
+          this.grid.openByIndex(num - 1);
+          return;
+        }
+      }
+
+      // ? = keyboard help (global)
+      if (code === 'Slash') {
+        e.preventDefault();
+        this._toggleKeyboardHelp();
       }
     });
   }
@@ -1059,13 +1242,27 @@ export class App {
 
   _startInvestigation() {
     if (this._selectedCams.size === 0) return;
-    console.log(`[app] Investigation mode: ${this._selectedCams.size} cameras`);
+    const selectedIds = [...this._selectedCams];
+    console.log(`[investigation] Starting with ${selectedIds.length} cameras: ${selectedIds.join(', ')}`);
 
-    // Stop all non-selected cameras to free resources
+    // Stop all non-selected cameras: kill HD/playback streams on backend, then disable
+    let hdCleaned = 0, pbCleaned = 0;
     for (const cam of this.grid.cameras) {
-      if (!cam.isSelected && cam.player.enabled) {
-        cam.disable();
+      if (!cam.isSelected) {
+        // Clean up backend streams before disabling
+        if (cam._hdStream) {
+          this.api.deleteHdStream(cam.id).catch(() => {});
+          hdCleaned++;
+        }
+        if (cam.isPlayback) {
+          this.api.deletePlayback(cam.playbackStreamName).catch(() => {});
+          pbCleaned++;
+        }
+        if (cam.player.enabled) cam.disable();
       }
+    }
+    if (hdCleaned || pbCleaned) {
+      console.log(`[investigation] Cleaned ${hdCleaned} HD + ${pbCleaned} playback streams`);
     }
 
     this.grid.enterInvestigationMode();
@@ -1073,6 +1270,21 @@ export class App {
     if (startBtn) startBtn.remove();
     const countEl = document.querySelector('.selection-badge .sel-count');
     if (countEl) countEl.textContent = `${this._selectedCams.size} synced`;
+
+    // Update NVR button counts to show only synced cameras
+    this._updateGroupCounts();
+
+    // Reset active group filter (investigation shows its own set)
+    this.grid.groupFilter = '';
+    document.querySelectorAll('.group-btn').forEach(b => {
+      b.classList.remove('active');
+      b.style.background = '';
+      const g = b.dataset.group;
+      const colorMap = this.grid._groupColorMap;
+      if (colorMap && colorMap.has(g)) {
+        b.style.color = colorMap.get(g).bright;
+      }
+    });
 
     // Sync playback state from first selected camera to all others
     const selected = this.grid.selectedCameras;
@@ -1099,6 +1311,7 @@ export class App {
           }
         }
         this._showHint(`Investigation: ${selected.length} cameras synced to archive`);
+        console.log(`[investigation] Synced ${selected.length - 1} cameras to archive at ${pos.toLocaleTimeString()}`);
       }
     } else {
       // Leader in LIVE → stop archive on all others
@@ -1109,13 +1322,16 @@ export class App {
         }
       }
       this._showHint(`Investigation: ${selected.length} cameras synced to LIVE`);
+      console.log(`[investigation] Synced ${selected.length} cameras to LIVE`);
     }
   }
 
   _stopInvestigation() {
-    console.log('[app] Stopping investigation mode');
+    const syncedIds = this.grid.selectedCameras.map(c => c.id);
+    console.log(`[investigation] Stopping. Cameras were: ${syncedIds.join(', ')}`);
     // 1. Kill all active streams: playback + SD + HD on every camera
     for (const cam of this.grid.cameras) {
+      if (cam._hdStream) this.api.deleteHdStream(cam.id).catch(() => {});
       if (cam.isPlayback || cam._pausedPosition) this._stopPlayback(cam);
       cam.disable();
     }
@@ -1123,7 +1339,29 @@ export class App {
     this.grid.exitInvestigationMode();
     this._selectedCams.clear();
     document.querySelector('.selection-badge')?.remove();
-    // 3. Restart all cameras with staggered start
+
+    // 3. Reset group filter and restore full counts
+    this.grid.groupFilter = '';
+    document.querySelectorAll('.group-btn').forEach(b => {
+      b.classList.remove('active');
+      b.style.background = '';
+      const g = b.dataset.group;
+      const colorMap = this.grid._groupColorMap;
+      if (colorMap && colorMap.has(g)) {
+        b.style.color = colorMap.get(g).bright;
+      }
+    });
+    this._updateGroupCounts();
+
+    // 4. Restore grid button highlighting
+    const activeColsClass = [...this.grid.gridEl.classList].find(c => c.startsWith('cols-'));
+    document.querySelectorAll('.grid-btn').forEach(b => {
+      const match = activeColsClass === `cols-${b.dataset.cols}` ||
+        (activeColsClass === 'cols-auto' && b.classList.contains('grid-btn-auto'));
+      b.classList.toggle('active', match);
+    });
+
+    // 5. Restart all cameras with staggered start
     this.grid.applyFilters();
     this._showHint('Investigation ended');
   }
@@ -1135,44 +1373,38 @@ export class App {
   }
 
   _syncStartToSelected(sourceCam, start, end, resolution) {
-    for (const cam of this.grid.selectedCameras) {
-      if (cam === sourceCam) continue;
+    const targets = this.grid.selectedCameras.filter(c => c !== sourceCam);
+    console.log(`[investigation] Sync archive start from ${sourceCam.id} → ${targets.map(c => c.id).join(', ')}`);
+    for (const cam of targets) {
       if (cam.isPlayback) {
-        // Already in archive → seek to new start time
-        console.log(`[app] Sync seek (was archive): ${cam.id}`);
         this._seekPlayback(cam, new Date(start));
       } else {
-        // In LIVE → start archive
-        console.log(`[app] Sync start: ${cam.id}`);
         this._startPlayback(cam, start, end, resolution);
       }
     }
   }
 
   _syncLiveToSelected(sourceCam) {
-    for (const cam of this.grid.selectedCameras) {
-      if (cam === sourceCam) continue;
-      if (cam.isPlayback || cam._pausedPosition) {
-        console.log(`[app] Sync LIVE: ${cam.id}`);
-        this._stopPlayback(cam);
-      }
+    const targets = this.grid.selectedCameras.filter(c => c !== sourceCam && (c.isPlayback || c._pausedPosition));
+    if (targets.length === 0) return;
+    console.log(`[investigation] Sync LIVE from ${sourceCam.id} → ${targets.map(c => c.id).join(', ')}`);
+    for (const cam of targets) {
+      this._stopPlayback(cam);
     }
   }
 
   _syncSeekToSelected(sourceCam, seekTime) {
-    for (const cam of this.grid.selectedCameras) {
-      if (cam === sourceCam) continue;
+    const targets = this.grid.selectedCameras.filter(c => c !== sourceCam);
+    console.log(`[investigation] Sync seek ${seekTime.toLocaleTimeString()} from ${sourceCam.id} → ${targets.map(c => c.id).join(', ')}`);
+    for (const cam of targets) {
       if (cam.isPlayback || cam._pausedPosition) {
-        console.log(`[app] Sync seek: ${cam.id}`);
         this._seekPlayback(cam, seekTime);
       } else {
-        // Camera is in LIVE → start archive at seekTime
         const pad = (n) => String(n).padStart(2, '0');
         const fmt = (d) => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
         const endOfDay = new Date(seekTime);
         endOfDay.setHours(23, 59, 59, 0);
         const resolution = sourceCam.playbackResolution || 'original';
-        console.log(`[app] Sync start (was LIVE): ${cam.id}`);
         this._startPlayback(cam, fmt(seekTime), fmt(endOfDay), resolution);
       }
     }
@@ -1180,9 +1412,10 @@ export class App {
 
   async _syncPauseToSelected(sourceCam) {
     const position = sourceCam._pausedPosition;
-    for (const cam of this.grid.selectedCameras) {
-      if (cam === sourceCam || !cam.isPlayback) continue;
-      console.log(`[app] Sync pause: ${cam.id}`);
+    const targets = this.grid.selectedCameras.filter(c => c !== sourceCam && c.isPlayback);
+    if (targets.length === 0) return;
+    console.log(`[investigation] Sync pause from ${sourceCam.id} → ${targets.map(c => c.id).join(', ')}`);
+    for (const cam of targets) {
       cam._captureFrame();          // capture BEFORE pause
       cam.video.pause();
       cam.stopPlaybackTimer();
@@ -1203,9 +1436,10 @@ export class App {
   }
 
   _syncResumeToSelected(sourceCam, position) {
-    for (const cam of this.grid.selectedCameras) {
-      if (cam === sourceCam || !cam._pausedPosition) continue;
-      console.log(`[app] Sync resume: ${cam.id}`);
+    const targets = this.grid.selectedCameras.filter(c => c !== sourceCam && c._pausedPosition);
+    if (targets.length === 0) return;
+    console.log(`[investigation] Sync resume from ${sourceCam.id} at ${position.toLocaleTimeString()} → ${targets.map(c => c.id).join(', ')}`);
+    for (const cam of targets) {
       cam.el.classList.remove('paused');
       cam._showPauseIndicator('play');
       cam._pausedPosition = null;
@@ -1244,6 +1478,55 @@ export class App {
       }
     }
     console.log(`[recovery] Restarted ${restarted} cameras (next recovery available in ${Math.round((30000 - (Date.now() - this._streamRecoveryCooldown)) / 1000)}s)`);
+  }
+
+  /** Toggle keyboard shortcuts help overlay. */
+  _toggleKeyboardHelp() {
+    let overlay = document.getElementById('kbd-help-overlay');
+    if (overlay) { overlay.remove(); return; }
+
+    overlay = document.createElement('div');
+    overlay.id = 'kbd-help-overlay';
+    const isFs = !!this.grid.fullscreenCamera;
+    overlay.innerHTML = `
+      <div class="kbd-help-panel">
+        <div class="kbd-help-title">Keyboard shortcuts</div>
+        <div class="kbd-help-section">${isFs ? 'Fullscreen' : 'Grid'}</div>
+        ${isFs ? `
+          <div class="kbd-row"><kbd>←</kbd><kbd>→</kbd><span>Navigate cameras</span></div>
+          <div class="kbd-row"><kbd>J</kbd><kbd>K</kbd><span>Seek ±30s (archive) / jump to archive (LIVE)</span></div>
+          <div class="kbd-row"><kbd>Shift</kbd>+<kbd>J</kbd><kbd>K</kbd><span>Seek ±5m</span></div>
+          <div class="kbd-row"><kbd>↑</kbd><kbd>↓</kbd><span>Volume up/down</span></div>
+          <div class="kbd-row"><kbd>Space</kbd><span>Pause / resume</span></div>
+          <div class="kbd-row"><kbd>L</kbd><span>Go to LIVE / open playback</span></div>
+          <div class="kbd-row"><kbd>P</kbd><span>Playback panel</span></div>
+          <div class="kbd-row"><kbd>H</kbd><span>Toggle HD</span></div>
+          <div class="kbd-row"><kbd>1</kbd>-<kbd>4</kbd><span>Zoom 1×–4×</span></div>
+          <div class="kbd-row"><kbd>Z</kbd><span>Reset zoom</span></div>
+          <div class="kbd-row"><kbd>Scroll</kbd><span>Zoom in/out</span></div>
+          <div class="kbd-row"><kbd>Drag</kbd><span>Pan (when zoomed)</span></div>
+          <div class="kbd-row"><kbd>Enter</kbd><span>Exit fullscreen</span></div>
+          <div class="kbd-row"><kbd>F</kbd><span>Native fullscreen</span></div>
+        ` : `
+          <div class="kbd-row"><kbd>←</kbd><kbd>→</kbd><kbd>↑</kbd><kbd>↓</kbd><span>Navigate cameras</span></div>
+          <div class="kbd-row"><kbd>Enter</kbd><span>Open focused camera</span></div>
+          <div class="kbd-row"><kbd>Space</kbd><span>Select for investigation</span></div>
+          <div class="kbd-row"><kbd>1</kbd>-<kbd>9</kbd><span>Open camera by position</span></div>
+        `}
+        <div class="kbd-help-section">Global</div>
+        <div class="kbd-row"><kbd>M</kbd><span>Mute / unmute</span></div>
+        <div class="kbd-row"><kbd>R</kbd><span>Refresh all</span></div>
+        <div class="kbd-row"><kbd>C</kbd><span>Compact mode</span></div>
+        <div class="kbd-row"><kbd>T</kbd><span>Toggle theme</span></div>
+        <div class="kbd-row"><kbd>F</kbd><span>Native fullscreen</span></div>
+        <div class="kbd-row"><kbd>Esc</kbd><span>Back / exit</span></div>
+        <div class="kbd-row"><kbd>Ctrl</kbd>+<kbd>1</kbd>-<kbd>6</kbd><span>Grid columns</span></div>
+        <div class="kbd-row"><kbd>?</kbd><span>This help</span></div>
+      </div>`;
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) overlay.remove();
+    });
+    document.body.appendChild(overlay);
   }
 
   /** Cleanup all playback streams on page unload. */

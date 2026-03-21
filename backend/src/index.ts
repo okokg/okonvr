@@ -1,14 +1,15 @@
 import Fastify from 'fastify';
-import { loadConfig } from './config';
+import { loadConfig, OkoConfig } from './config';
 import { initDb, ensureCameraRows } from './db';
-import { createProvider } from './providers';
+import { createProvider, NvrEntry } from './providers';
 import { registry } from './services/camera-registry';
 import { initStreamManager, cleanupAllInternal, reapOrphanStreams, ensureBaseStreams } from './services/stream-manager';
 import { generateGo2rtcConfig } from './services/go2rtc-config';
 import { startConfigWatcher } from './services/config-watcher';
-import { probeCodecs } from './services/codec-prober';
+import { probeCodecs, clearCodecCache } from './services/codec-prober';
+import { setActivity, clearActivity } from './services/server-activity';
 import { setUiConfig, setClientExtras } from './services/config-store';
-import { startNvrHealth } from './services/nvr-health';
+import { startNvrHealth, onNvrOnline } from './services/nvr-health';
 import { startSnapshotCache } from './services/snapshot-cache';
 import { cameraRoutes } from './routes/cameras';
 import { playbackRoutes } from './routes/playback';
@@ -18,49 +19,107 @@ import { healthRoutes } from './routes/health';
 import { statsRoutes } from './routes/stats';
 import { snapshotRoutes } from './routes/snapshots';
 
+/** Run auto-discovery for a single NVR. Pure function — caller manages activities. */
+async function discoverNvr(nvr: NvrEntry): Promise<boolean> {
+  if (!nvr.discover) return false;
+
+  const excludeStr = nvr.exclude.length > 0 ? ` (exclude: ${nvr.exclude.join(', ')})` : '';
+  console.log(`[${nvr.name}] Auto-discovering from ${nvr.config.provider} @ ${nvr.config.host}${excludeStr}...`);
+
+  const provider = createProvider(nvr.config);
+  try {
+    const discovered = await provider.discoverChannels();
+    if (!discovered || discovered.length === 0) {
+      console.warn(`[${nvr.name}] ✗ Discovery returned 0 cameras.`);
+      return false;
+    }
+
+    const excludeSet = new Set(nvr.exclude);
+    const filtered = discovered.filter(d => !excludeSet.has(d.channel));
+
+    nvr.cameras = filtered.map(d => ({
+      id: `${nvr.id_prefix}${d.channel}`,
+      channel: d.channel,
+      label: d.name,
+    }));
+
+    const excluded = discovered.length - filtered.length;
+    console.log(`[${nvr.name}] ✓ Discovered ${discovered.length} cameras${excluded > 0 ? `, excluded ${excluded}` : ''} → ${filtered.length} active`);
+    return true;
+  } catch (e: any) {
+    console.warn(`[${nvr.name}] ✗ Discovery error: ${e.message}`);
+    return false;
+  }
+}
+
+/** Re-discover cameras for a specific NVR (e.g. after it comes back online). */
+async function rediscoverNvr(nvrName: string, config: OkoConfig) {
+  const nvr = registry.getNvrEntry(nvrName);
+  if (!nvr) {
+    console.log(`[rediscovery] NVR "${nvrName}" not found in registry`);
+    return;
+  }
+
+  setActivity('rediscovery', `Re-discovering ${nvrName}...`);
+  const hadCameras = nvr.cameras.length;
+  const ok = await discoverNvr(nvr);
+  if (!ok && hadCameras > 0) {
+    console.log(`[rediscovery] ${nvrName}: discovery failed but keeping ${hadCameras} existing cameras`);
+    clearActivity('rediscovery');
+    return;
+  }
+  if (!ok) { clearActivity('rediscovery'); return; }
+
+  // Update registry
+  const newIds = registry.updateNvr(nvrName, nvr.cameras);
+  console.log(`[rediscovery] ${nvrName}: registry updated (${nvr.cameras.length} cameras, ${newIds.length} new)`);
+  setActivity('rediscovery', `${nvrName}: updating streams...`);
+
+  // Update DB rows
+  const cameraEntries = nvr.cameras.map(cam => ({ id: cam.id, group: nvr.name, label: cam.label }));
+  ensureCameraRows(cameraEntries);
+
+  // Regenerate go2rtc config and ensure streams
+  generateGo2rtcConfig(config);
+  const ids = registry.allIds();
+  ensureBaseStreams(ids, (id) => {
+    const entry = registry.getEntry(id);
+    if (!entry) return null;
+    return entry.provider.getLiveUrl(entry.camera);
+  });
+
+  console.log(`[rediscovery] ${nvrName}: go2rtc config + streams updated`);
+  clearActivity('rediscovery');
+
+  // Re-probe codecs for all cameras of this NVR (10s delay for streams to connect)
+  const camIds = nvr.cameras.map(c => c.id);
+  setTimeout(() => probeNvrCodecs(camIds), 10000);
+}
+
 async function main() {
   const config = loadConfig();
   initDb();
   setUiConfig(config.ui);
   setClientExtras(config.snapshots, config.playback);
 
-  // Auto-discover or use configured channels
+  // Auto-discover cameras from all NVRs
   for (const nvr of config.nvrs) {
     if (nvr.discover) {
-      const excludeStr = nvr.exclude.length > 0 ? ` (exclude: ${nvr.exclude.join(', ')})` : '';
-      console.log(`[${nvr.name}] Auto-discovering from ${nvr.config.provider} @ ${nvr.config.host}${excludeStr}...`);
-      const provider = createProvider(nvr.config);
-      try {
-        const discovered = await provider.discoverChannels();
-        if (discovered && discovered.length > 0) {
-          // Apply exclusions
-          const excludeSet = new Set(nvr.exclude);
-          const filtered = discovered.filter(d => !excludeSet.has(d.channel));
-
-          nvr.cameras = filtered.map(d => ({
-            id: `${nvr.id_prefix}${d.channel}`,
-            channel: d.channel,
-            label: d.name,
-          }));
-
-          const excluded = discovered.length - filtered.length;
-          console.log(`[${nvr.name}] ✓ Discovered ${discovered.length} cameras${excluded > 0 ? `, excluded ${excluded}` : ''} → ${filtered.length} active`);
-        } else {
-          console.warn(`[${nvr.name}] ✗ Discovery returned 0 cameras. Use channels: "1-32" in oko.yaml.`);
-        }
-      } catch (e: any) {
-        console.warn(`[${nvr.name}] ✗ Discovery error: ${e.message}. Use channels: "1-32" in oko.yaml.`);
-      }
+      setActivity('discovery', `Discovering ${nvr.name}...`);
+      await discoverNvr(nvr);
     } else {
       console.log(`[${nvr.name}] ${nvr.cameras.length} cameras from config`);
     }
   }
+  clearActivity('discovery');
 
   const totalCameras = config.nvrs.reduce((n, nvr) => n + nvr.cameras.length, 0);
   console.log(`OKO NVR v0.1.0 — ${config.nvrs.length} NVR(s), ${totalCameras} cameras`);
   for (const nvr of config.nvrs) {
     console.log(`  ${nvr.name}: ${nvr.config.provider} @ ${nvr.config.host} (${nvr.cameras.length} cameras)`);
   }
+  clearActivity('discovery');
+  setActivity('startup', 'Initializing streams...');
 
   registry.init(config.nvrs);
 
@@ -83,18 +142,27 @@ async function main() {
 
   await fastify.listen({ port: config.server.port, host: '0.0.0.0' });
   console.log(`Backend listening on port ${config.server.port}`);
+  clearActivity('startup');
 
   // Watch oko.yaml for live changes
   startConfigWatcher(config);
   startNvrHealth();
   startSnapshotCache(config.snapshots, config.go2rtc.api);
 
+  // Wire NVR online callback → re-discover cameras
+  onNvrOnline((nvrName) => {
+    console.log(`[health] ${nvrName} came online — triggering re-discovery`);
+    rediscoverNvr(nvrName, config).catch(err =>
+      console.error(`[rediscovery] ${nvrName} failed:`, err.message)
+    );
+  });
+
   setTimeout(() => cleanupAllInternal(), 3000);
 
   // Reap orphaned HD/playback/transcode streams every 15s (30s TTL)
   setInterval(() => reapOrphanStreams(30000), 15000);
 
-  // Auto-recover base streams if go2rtc lost them (crash/restart) — check every 60s
+  // Auto-recover base streams if go2rtc lost them (crash/restart) — check every 15s
   setInterval(() => {
     const ids = registry.allIds();
     ensureBaseStreams(ids, (id) => {
@@ -102,32 +170,88 @@ async function main() {
       if (!entry) return null;
       return entry.provider.getLiveUrl(entry.camera);
     });
-  }, 60000);
+  }, 15000);
 
   // Background: probe codecs for all cameras (detects audio)
   setTimeout(() => probeAllCodecs(), 10000);
+
+  // Re-probe all codecs every 6 hours (picks up NVR config changes)
+  setInterval(() => probeAllCodecs(true), 6 * 60 * 60 * 1000);
 }
 
-/** Probe codecs for all cameras in background. Sequential to avoid NVR overload. */
-async function probeAllCodecs() {
-  const ids = registry.allIds();
-  console.log(`[probe] Starting background codec probe for ${ids.length} cameras...`);
-  let probed = 0;
-  let withAudio = 0;
+/** Guard against parallel probe runs. */
+let probeRunning = false;
 
-  for (const id of ids) {
-    try {
-      const codecs = probeCodecs(id);
-      probed++;
-      if (codecs.audio && codecs.audio !== 'none' && codecs.audio !== 'unknown') {
-        withAudio++;
-      }
-    } catch {}
-    // Small delay between probes
-    await new Promise(r => setTimeout(r, 200));
+/** Probe codecs for all cameras in background. Sequential to avoid NVR overload.
+ * @param force - bypass cache, re-probe from RTSP
+ */
+async function probeAllCodecs(force = false) {
+  if (probeRunning) {
+    console.log('[probe] Skipped — another probe is already running');
+    return;
   }
+  probeRunning = true;
+  try {
+    const ids = registry.allIds();
+    if (ids.length === 0) { console.log('[probe] No cameras to probe'); return; }
+    const t0 = Date.now();
+    console.log(`[probe] ── Starting ${force ? 'FORCED ' : ''}probe for ${ids.length} cameras ──`);
+    setActivity('probe', `Probing codecs...`, `0/${ids.length}`);
 
-  console.log(`[probe] Done: ${probed}/${ids.length} probed, ${withAudio} with audio`);
+    let probed = 0, failed = 0;
+    const codecs: Record<string, number> = {};
+    const audioTypes: Record<string, number> = {};
+
+    for (const id of ids) {
+      try {
+        const result = probeCodecs(id, force);
+        probed++;
+        codecs[result.video] = (codecs[result.video] || 0) + 1;
+        audioTypes[result.audio] = (audioTypes[result.audio] || 0) + 1;
+      } catch (e: any) {
+        failed++;
+        console.log(`[probe] ${id}: EXCEPTION — ${e.message?.substring(0, 80)}`);
+      }
+      setActivity('probe', `Probing codecs...`, `${probed + failed}/${ids.length}`);
+      await new Promise(r => setTimeout(r, 200));
+    }
+
+    const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
+    const codecStr = Object.entries(codecs).map(([k, v]) => `${k}:${v}`).join(' ');
+    const audioStr = Object.entries(audioTypes).map(([k, v]) => `${k}:${v}`).join(' ');
+    console.log(`[probe] ── Done in ${elapsed}s: ${probed}/${ids.length} ok, ${failed} failed ──`);
+    console.log(`[probe]    Video: ${codecStr}`);
+    console.log(`[probe]    Audio: ${audioStr}`);
+  } finally {
+    probeRunning = false;
+    clearActivity('probe');
+  }
+}
+
+/** Probe codecs for specific cameras (e.g. after NVR rediscovery). */
+async function probeNvrCodecs(cameraIds: string[]) {
+  if (probeRunning) {
+    console.log(`[probe] Skipped rediscovery probe — main probe running`);
+    return;
+  }
+  probeRunning = true;
+  try {
+    const t0 = Date.now();
+    console.log(`[probe] Re-probing ${cameraIds.length} cameras: ${cameraIds.slice(0, 5).join(', ')}${cameraIds.length > 5 ? '...' : ''}`);
+    setActivity('probe', `Re-probing codecs...`, `0/${cameraIds.length}`);
+    clearCodecCache(cameraIds);
+    let ok = 0, fail = 0;
+    for (const id of cameraIds) {
+      try { probeCodecs(id, true); ok++; } catch { fail++; }
+      setActivity('probe', `Re-probing codecs...`, `${ok + fail}/${cameraIds.length}`);
+      await new Promise(r => setTimeout(r, 200));
+    }
+    const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
+    console.log(`[probe] Rediscovery probe done in ${elapsed}s: ${ok} ok, ${fail} failed`);
+  } finally {
+    probeRunning = false;
+    clearActivity('probe');
+  }
 }
 
 main().catch((err) => {

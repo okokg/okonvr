@@ -27,6 +27,7 @@ db.exec(`
 // Migrations — safe to run multiple times
 try { db.exec('ALTER TABLE cameras ADD COLUMN main_codec TEXT DEFAULT ""'); } catch {}
 try { db.exec('ALTER TABLE cameras ADD COLUMN main_audio TEXT DEFAULT ""'); } catch {}
+try { db.exec('ALTER TABLE cameras ADD COLUMN probe_time INTEGER DEFAULT 0'); } catch {}
 
 export function initDb() {
   // No-op — tables created at module load.
@@ -62,9 +63,9 @@ export const stmts = {
   `),
   updateOrder:  db.prepare('UPDATE cameras SET sort_order = ? WHERE id = ?'),
   insertIgnore: db.prepare('INSERT OR IGNORE INTO cameras (id, sort_order) VALUES (?, ?)'),
-  getCodecs:    db.prepare('SELECT main_codec, main_audio FROM cameras WHERE id = ?'),
+  getCodecs:    db.prepare('SELECT main_codec, main_audio, probe_time FROM cameras WHERE id = ?'),
   setCodecs:    db.prepare(`
-    INSERT INTO cameras (id, main_codec, main_audio) VALUES (?, ?, ?)
-    ON CONFLICT(id) DO UPDATE SET main_codec=excluded.main_codec, main_audio=excluded.main_audio
+    INSERT INTO cameras (id, main_codec, main_audio, probe_time) VALUES (?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET main_codec=excluded.main_codec, main_audio=excluded.main_audio, probe_time=excluded.probe_time
   `),
 };

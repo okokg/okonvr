@@ -98,6 +98,52 @@ body {
   margin-right: 2px;
 }
 
+/* ── Server activity bar ── */
+
+.server-activity-bar {
+  display: none;
+  padding: 4px 20px;
+  background: rgba(255, 171, 0, 0.06);
+  border-bottom: 1px solid rgba(255, 171, 0, 0.15);
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--warn);
+  gap: 16px;
+  align-items: center;
+}
+
+.server-activity-bar.visible {
+  display: flex;
+}
+
+.server-activity-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.server-activity-item .activity-spinner {
+  width: 10px;
+  height: 10px;
+  border: 1.5px solid rgba(255, 171, 0, 0.3);
+  border-top-color: var(--warn);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.server-activity-item .activity-progress {
+  color: rgba(255, 171, 0, 0.6);
+}
+
+.server-activity-item .activity-elapsed {
+  color: rgba(255, 171, 0, 0.4);
+  font-size: 10px;
+}
+
 .ctrl-btn {
   background: none;
   border: 1px solid var(--border);
@@ -230,7 +276,7 @@ body {
   pointer-events: auto;
   opacity: 0;
   transition: opacity 0.2s;
-  z-index: 5;
+  z-index: 22;  /* controls: above ghud */
   color: transparent;
 }
 .cam-select::before {
@@ -316,7 +362,7 @@ body {
   justify-content: space-between;
   background: linear-gradient(transparent, rgba(0, 0, 0, 0.7));
   pointer-events: none;
-  z-index: 3;
+  z-index: 20;  /* controls */
 }
 
 .cam-name-wrap {
@@ -452,7 +498,7 @@ body {
   gap: 4px;
   align-items: center;
   pointer-events: none;
-  z-index: 3;
+  z-index: 20;
 }
 
 .cam-audio-wrap {
@@ -588,6 +634,64 @@ body {
   display: none;
 }
 
+/* ── Z-index layer system ──
+ * Content:  1-5   (video, snapshot, freeze)
+ * Controls: 20    (top bar, bottom HUD, seek, buttons)
+ * Float:    30    (minimap, pause indicator, tooltips)
+ * Loading:  40    (spinner, NVR offline)
+ * Modal:    50    (playback panel, kbd-help)
+ */
+
+/* Zoom badge — lives inside top bar, right zone */
+.cam-zoom-badge {
+  display: none;
+  background: rgba(255, 171, 0, 0.25);
+  border: 1px solid rgba(255, 171, 0, 0.5);
+  color: #ffa502;
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 4px;
+  line-height: 1;
+}
+.cam-zoom-badge.visible { display: inline-block; }
+
+/* Zoom minimap */
+.cam-minimap {
+  display: none;
+  position: absolute;
+  top: 40px;
+  right: 8px;
+  z-index: 30;
+  border: 1px solid rgba(255, 171, 0, 0.4);
+  border-radius: 4px;
+  overflow: hidden;
+  cursor: move;
+  pointer-events: auto;
+  background: rgba(0, 0, 0, 0.6);
+  user-select: none;
+}
+.cam-minimap.visible { display: block; }
+
+.cam-minimap-canvas {
+  display: block;
+  width: 120px;
+  opacity: 0.8;
+}
+
+.cam-minimap-viewport {
+  position: absolute;
+  border: 1.5px solid rgba(255, 171, 0, 0.8);
+  background: rgba(255, 171, 0, 0.08);
+  pointer-events: none;
+}
+
+/* Zoom cursor states */
+.cam.fullscreen video { cursor: default; }
+.cam.fullscreen.cam-zoomed video { cursor: grab; }
+.cam.fullscreen.cam-zoomed.cam-zoom-dragging video { cursor: grabbing; }
+
 
 
 
@@ -634,7 +738,7 @@ body {
   display: none;
   flex-direction: column;
   gap: 8px;
-  z-index: 10;
+  z-index: 50;  /* modal */
   pointer-events: auto;
   backdrop-filter: blur(6px);
 }
@@ -760,7 +864,7 @@ body {
 @keyframes pulse-hint { 0%,100% { opacity: 0.6; } 50% { opacity: 1; } }
 
 .cam.playback-mode { border-color: var(--warn); }
-.cam.kbd-focus { outline: 3px solid #fff; outline-offset: -3px; z-index: 2; }
+.cam.kbd-focus { z-index: 2; box-shadow: 0 0 0 3px #fff; }
 .cam.playback-mode .cam-overlay { background: linear-gradient(transparent, rgba(80, 50, 0, 0.7)); }
 
 /* NVR offline state */
@@ -816,10 +920,21 @@ body {
   pointer-events: none;
   opacity: 0;
   transition: opacity 0.3s;
-  z-index: 10;
+  z-index: 30; /* float */
 }
 .cam-pause-indicator.visible { opacity: 1; }
 .cam.paused .cam-pause-indicator.visible { opacity: 0.8; }
+
+/* Persistent pause indicator on grid thumbnails */
+.cam.paused:not(.fullscreen) .cam-pause-indicator {
+  opacity: 0.7;
+  width: 32px;
+  height: 32px;
+}
+.cam.paused:not(.fullscreen) .cam-pause-indicator svg {
+  width: 18px;
+  height: 18px;
+}
 
 /* ── Seek Timeline (playback mode) ── */
 
@@ -833,7 +948,7 @@ body {
   align-items: flex-start;
   gap: 6px;
   pointer-events: auto;
-  z-index: 5;
+  z-index: 20;  /* controls */
 }
 
 .cam-seek-timeline.active { display: flex; }
@@ -1128,7 +1243,7 @@ body {
   bottom: 0;
   left: 0;
   right: 0;
-  z-index: 6;
+  z-index: 20;  /* controls */
   flex-direction: column;
   pointer-events: auto;
 }
@@ -1153,7 +1268,7 @@ body {
   position: absolute;
   top: 4px;
   right: 4px;
-  z-index: 8;
+  z-index: 21;  /* controls: above ghud */
   align-items: center;
   gap: 4px;
   padding: 2px 8px;
@@ -1698,7 +1813,7 @@ body {
   padding: 6px 16px;
   background: rgba(0, 0, 0, 0.6);
   align-items: center;
-  z-index: 10;
+  z-index: 20;  /* controls */
 }
 .cam.fullscreen .cam-name { font-size: 11px; }
 .cam.fullscreen .cam-label { font-size: 9px; }
@@ -1841,7 +1956,7 @@ body {
   align-items: center;
   justify-content: center;
   gap: 8px;
-  z-index: 4;
+  z-index: 40;  /* loading */
   pointer-events: none;
 }
 
@@ -1974,7 +2089,7 @@ body {
   opacity: 0;
   transition: opacity 0.2s;
   white-space: nowrap;
-  z-index: 3;
+  z-index: 30;  /* float */
 }
 
 .cam-info-tooltip.visible { opacity: 1; }
@@ -2041,7 +2156,7 @@ body {
   .search-wrap { width: 100%; order: 99; }
   .search-input { width: 100%; font-size: 16px; padding: 8px 28px 8px 8px; }
 
-  .grid { grid-template-columns: repeat(2, 1fr) !important; }
+  .grid:not(.cols-auto) { grid-template-columns: repeat(2, 1fr) !important; }
   .grid.cols-1 { grid-template-columns: 1fr !important; }
 
   .cam-name { font-size: 10px; }
@@ -2056,7 +2171,7 @@ body {
 }
 
 @media (max-width: 480px) {
-  .grid { grid-template-columns: 1fr !important; }
+  .grid:not(.cols-auto) { grid-template-columns: 1fr !important; }
   .grid.cols-2 { grid-template-columns: repeat(2, 1fr) !important; }
   .header h1 { font-size: 11px; }
   .ctrl-btn { padding: 8px 12px; }
@@ -2066,3 +2181,107 @@ body {
   .cam { min-height: 100px; }
   .ctrl-btn { padding: 8px 12px; min-height: 36px; }
 }
+
+/* ── Keyboard help overlay ── */
+
+#kbd-help-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  background: rgba(0, 0, 0, 0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  backdrop-filter: blur(4px);
+}
+
+.kbd-help-panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 20px 28px;
+  max-width: 420px;
+  width: 90%;
+  max-height: 80vh;
+  overflow-y: auto;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--text);
+}
+
+.kbd-help-title {
+  font-size: 14px;
+  font-weight: 700;
+  margin-bottom: 12px;
+  color: var(--accent);
+}
+
+.kbd-help-section {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--text-dim);
+  margin: 14px 0 6px;
+  border-top: 1px solid var(--border);
+  padding-top: 8px;
+}
+
+.kbd-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 0;
+}
+
+.kbd-row span {
+  margin-left: auto;
+  color: var(--text-dim);
+}
+
+.kbd-row kbd {
+  display: inline-block;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 6px;
+  font-family: var(--mono);
+  font-size: 11px;
+  min-width: 20px;
+  text-align: center;
+}
+
+/* ── Long-press quick actions menu (mobile) ── */
+
+.cam-quick-menu {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 30;  /* float */
+  display: flex;
+  gap: 8px;
+  background: rgba(10, 10, 12, 0.9);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 8px 12px;
+  pointer-events: auto;
+}
+
+.cam-quick-btn {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 10px;
+  padding: 8px 12px;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  min-width: 48px;
+}
+
+.cam-quick-btn:active { background: var(--accent); color: #000; }
+

@@ -5,7 +5,7 @@
 
 import { BACKEND_URL } from './config.js';
 
-(window._oko = window._oko || {}).api = 'i1f0';
+(window._oko = window._oko || {}).api = 'i1f1';
 
 export class ApiClient {
   /**
@@ -92,6 +92,13 @@ export class ApiClient {
     await fetch(`${BACKEND_URL}/playback`, {
       method: 'DELETE',
     }).catch(() => {});
+  }
+
+  /** Trigger immediate stream recovery in go2rtc. */
+  async recoverStreams() {
+    const res = await fetch(`${BACKEND_URL}/recover-streams`, { method: 'POST' });
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
   }
 
   /** Create HD (main-stream) for a camera. Returns { stream, forceMSE, codec, audio }. */

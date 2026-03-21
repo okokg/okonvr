@@ -15,6 +15,12 @@ interface NvrStatus {
 
 const statusMap = new Map<string, NvrStatus>();
 let healthTimer: ReturnType<typeof setInterval> | null = null;
+let onNvrOnlineCallback: ((nvrName: string) => void) | null = null;
+
+/** Register callback for when an NVR transitions to online. */
+export function onNvrOnline(cb: (nvrName: string) => void) {
+  onNvrOnlineCallback = cb;
+}
 
 /** TCP connect check with timeout. */
 function tcpPing(host: string, port: number, timeoutMs = 5000): Promise<boolean> {
@@ -68,12 +74,17 @@ async function checkAllNvrs() {
     const reachable = await tcpPing(nvr.host, nvr.port);
 
     if (reachable) {
-      if (status.status !== 'online') {
+      const wasOffline = status.status !== 'online';
+      if (wasOffline) {
         console.log(`[health] ${nvr.name} (${nvr.host}:${nvr.port}): ONLINE`);
         status.since = now;
       }
       status.status = 'online';
       status.failures = 0;
+      // Trigger re-discovery when NVR comes back online
+      if (wasOffline && onNvrOnlineCallback) {
+        onNvrOnlineCallback(nvr.name);
+      }
     } else {
       status.failures++;
       if (status.failures >= maxFailures && status.status !== 'offline') {

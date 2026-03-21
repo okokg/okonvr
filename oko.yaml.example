@@ -16,7 +16,7 @@ playback:
   timeout: 30                    # FFmpeg timeout for archive streams
   playback_input: "-fflags nobuffer -flags low_delay -buffer_size 1 -rtsp_transport tcp -timeout 30 -i {input}"
   mse_cache_ttl: 60              # remember MSE mode per camera (seconds), skip WebRTC on reconnect
-  force_mse: true                # always use MSE for archive playback (more reliable for H.265)
+  force_mse: false               # disable WebRTC entirely, use MSE for all streams
                                  #   true  = MSE for all archives (recommended, avoids keyframe delays)
                                  #   false = try WebRTC first, fallback to MSE on failure
 

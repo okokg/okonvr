@@ -10,7 +10,7 @@
 
 import { CamPlayer } from './player.js';
 
-(window._oko = window._oko || {}).cameraView = 'v4f8';
+(window._oko = window._oko || {}).cameraView = 'v6a0';
 
 export class CameraView {
   /**
@@ -27,6 +27,9 @@ export class CameraView {
     this.el = this._createElement();
     this.video = this.el.querySelector('video');
     this.player = new CamPlayer(this.video, this.id);
+
+    /** The CamPlayer currently owning video.src. Only _switchPlayer changes this. */
+    this._activePlayer = null;
 
     // cache DOM refs
     this._statusDot = this.el.querySelector('.cam-status');
@@ -57,6 +60,10 @@ export class CameraView {
     this._hdPlayer = null;
     this._hdStream = null;
 
+    // Digital zoom state
+    this._zoom = { scale: 1, tx: 0, ty: 0 };
+    this._zoomDragging = false;
+
     // Set audio availability from backend
     if (this.hasAudio) {
       this._audioIcon.classList.add('has-audio');
@@ -64,13 +71,22 @@ export class CameraView {
 
     this._bindPlayerEvents();
     this._bindDOMEvents();
+    this._bindZoomEvents();
   }
 
   // ── Public ──
 
   /** Start streaming. Transcode is triggered reactively if codec mismatch detected. */
   start() {
-    this.player.start();
+    // Already running with SD player — don't restart (kills MSE connection)
+    if (this._activePlayer === this.player && this.player.enabled) {
+      return;
+    }
+    // Don't interrupt active playback or HD
+    if (this._activePlayer && this._activePlayer !== this.player && this._activePlayer.enabled) {
+      return;
+    }
+    this._switchPlayer(this.player);
     if (!this.isPlayback) this._startGhudLive();
   }
 
@@ -86,15 +102,56 @@ export class CameraView {
       this._playbackPlayer.disable();
       this._playbackPlayer = null;
     }
-    this.player.disable();
+    this._switchPlayer(null); // disables active player + resets video
     this._stopRenderCheck();
   }
 
-  /** @returns {boolean} Whether the camera is currently connected. */
-  get isConnected() { return this.player.connected; }
+  // ── Video ownership ──
 
-  /** @returns {boolean} Whether the player is enabled. */
-  get isEnabled() { return this.player.enabled; }
+  /**
+   * Atomic player switch — the ONLY place that manages video ownership.
+   *
+   * Does NOT call video.load() when switching between players. Each player's
+   * connect method sets its own source (video.src for MSE, video.srcObject
+   * for WebRTC), which implicitly triggers the load algorithm. Explicit
+   * load() on an empty element puts it in NETWORK_EMPTY → Chrome doesn't
+   * repaint when srcObject is set later → black screen with decoded frames.
+   *
+   * @param {CamPlayer|null} newPlayer - player to activate, or null to stop all
+   * @param {'start'|'mse'} [method='start'] - how to start the new player
+   */
+  _switchPlayer(newPlayer, method = 'start') {
+    const old = this._activePlayer;
+    if (old && old !== newPlayer) {
+      old.disable();
+    }
+
+    // Full reset of video element: clear both source types + load() to reset decoder
+    // removeAttribute('src') + load() resets to HAVE_NOTHING state cleanly
+    // (Note: video.src='' + load() is DIFFERENT — empty string = relative URL = error)
+    this.video.pause();
+    this.video.srcObject = null;
+    this.video.removeAttribute('src');
+    this.video.load(); // reset H.265 hardware decoder pipeline
+    this._activePlayer = newPlayer;
+
+    if (newPlayer) {
+      if (method === 'mse') newPlayer.startMSE();
+      else newPlayer.start();
+    }
+  }
+
+  /** @returns {boolean} Whether the camera is currently connected. */
+  get isConnected() {
+    const p = this._activePlayer || this.player;
+    return p.connected;
+  }
+
+  /** @returns {boolean} Whether the player is enabled (SD, HD, or playback). */
+  get isEnabled() {
+    const p = this._activePlayer || this.player;
+    return p.enabled;
+  }
 
   /** Show/hide the camera tile. */
   setVisible(visible) {
@@ -154,7 +211,7 @@ export class CameraView {
       }
     }
     // Refresh info tooltip to show/hide PAUSED
-    const p = this._playbackPlayer || this._hdPlayer || this.player;
+    const p = this._activePlayer || this.player;
     if (p) this._updateInfoTooltip(p, p.bitrate || 0);
   }
 
@@ -167,12 +224,27 @@ export class CameraView {
       const c = document.createElement('canvas');
       c.width = v.videoWidth;
       c.height = v.videoHeight;
-      c.getContext('2d').drawImage(v, 0, 0);
+      const ctx = c.getContext('2d');
+      ctx.drawImage(v, 0, 0);
+
+      // Detect black frame: H.265 hardware decoder can't be captured to canvas.
+      // Sample 8 pixels across the frame — real video always has some noise/variation.
+      const w = c.width, h = c.height;
+      const points = [[w*.25,h*.25],[w*.5,h*.25],[w*.75,h*.25],[w*.5,h*.5],
+                       [w*.25,h*.75],[w*.5,h*.75],[w*.75,h*.75],[w*.1,h*.1]];
+      let allBlack = true;
+      for (const [x, y] of points) {
+        const d = ctx.getImageData(x|0, y|0, 1, 1).data;
+        if (d[0] > 0 || d[1] > 0 || d[2] > 0) { allBlack = false; break; }
+      }
+      if (allBlack) return false; // hardware decode → let paused <video> show last frame
+
       img.src = c.toDataURL('image/jpeg', 0.85);
       img.classList.add('visible');
+      img.style.transform = v.style.transform;
+      img.style.transformOrigin = v.style.transformOrigin;
       return true;
     } catch (e) {
-      // CORS / tainted canvas
       return false;
     }
   }
@@ -227,12 +299,10 @@ export class CameraView {
   enterFullscreen() {
     this.el.classList.add('fullscreen');
     if (!CameraView.globalMute) {
-      const hasAudio = this._audioIcon.classList.contains('has-audio');
-      this.video.muted = !hasAudio;
-      this._audioIcon.classList.toggle('unmuted', hasAudio);
+      this._tryUnmute();
     }
     // Show info tooltip immediately
-    const p = this._playbackPlayer || this._hdPlayer || this.player;
+    const p = this._activePlayer || this.player;
     if (p) this._updateInfoTooltip(p, p.bitrate || 0);
 
     // Populate fullscreen HUD info row
@@ -257,6 +327,17 @@ export class CameraView {
       const panel = this.el.querySelector('.cam-playback-panel');
       if (panel) panel.classList.add('open');
       this._panelWasOpen = false;
+    }
+
+    // Restore per-camera zoom if previously zoomed
+    if (this._zoom.scale > 1) {
+      this._clampPan();
+      this._applyZoom();
+    }
+
+    // Restore pause indicator if camera was paused
+    if (this.el.classList.contains('paused')) {
+      this._showPauseIndicator('pause');
     }
   }
 
@@ -309,7 +390,7 @@ export class CameraView {
   }
 
   /** Exit in-page fullscreen mode. */
-  exitFullscreen() {
+  exitFullscreen({ keepZoom = false } = {}) {
     this.el.classList.remove('fullscreen');
     this.el.classList.remove('fs-live');
     clearInterval(this._fsLiveTimer);
@@ -319,22 +400,29 @@ export class CameraView {
     if (panel) panel.classList.remove('open');
     const pbBtn = this.el.querySelector('.cam-playback-btn');
     if (pbBtn) pbBtn.classList.remove('active');
-    // Resume if paused
-    if (this.el.classList.contains('paused')) {
-      this.el.classList.remove('paused');
-      const ind = this.el.querySelector('.cam-pause-indicator');
-      if (ind) ind.classList.remove('visible');
-      if (this._pausedPosition && this.onPlaybackResume) {
-        // Archive was paused: resume stream
-        this.onPlaybackResume(this, this._pausedPosition);
-        this._pausedPosition = null;
-      } else {
-        this.video.play();
-      }
-    }
+
+    // Pause: always preserve state. Resume only via explicit togglePause.
+    // Just hide the indicator (enterFullscreen will restore it).
+    const ind = this.el.querySelector('.cam-pause-indicator');
+    if (ind) ind.classList.remove('visible');
+
     this.video.muted = true;
     this._audioIcon.classList.remove('unmuted');
     this._infoTooltip.classList.remove('visible');
+    if (keepZoom) {
+      // Hide zoom visuals but preserve _zoom state for later
+      this.video.style.transform = '';
+      this.video.style.transformOrigin = '';
+      const freeze = this.el.querySelector('.cam-freeze');
+      if (freeze) { freeze.style.transform = ''; freeze.style.transformOrigin = ''; }
+      this.el.classList.remove('cam-zoomed');
+      clearInterval(this._minimapTimer);
+      this._minimapTimer = null;
+      const mm = this.el.querySelector('.cam-minimap');
+      if (mm) mm.classList.remove('visible');
+    } else {
+      this._resetZoom();
+    }
   }
 
   /** @returns {boolean} */
@@ -355,7 +443,6 @@ export class CameraView {
     }
 
     this._hdStream = streamName;
-    this.player.stop();
     this._showLoading('switching to hd');
 
     this._hdPlayer = new CamPlayer(this.video, streamName, { preferH265: forceMSE });
@@ -374,11 +461,8 @@ export class CameraView {
       }
     };
 
-    if (forceMSE && !CamPlayer.h265WebRTCSupported) {
-      this._hdPlayer.startMSE();
-    } else {
-      this._hdPlayer.start();
-    }
+    const useMSE = forceMSE && !CamPlayer.h265WebRTCSupported;
+    this._switchPlayer(this._hdPlayer, useMSE ? 'mse' : 'start');
 
     // Update toggle state
     this._qualityToggle.querySelector('.quality-sd').classList.remove('active');
@@ -394,11 +478,8 @@ export class CameraView {
     }
     this._hdStream = null;
 
-    // Show loading while SD reconnects
     this._showLoading('switching to sd');
-
-    // Restart SD player
-    this.player.start();
+    this._switchPlayer(this.player);
 
     // Update toggle state
     this._qualityToggle.querySelector('.quality-hd').classList.remove('active');
@@ -416,11 +497,10 @@ export class CameraView {
 
   /** Switch live stream to a different go2rtc stream (e.g. transcoded). */
   switchToStream(newStreamName) {
-    this.player.disable();
     this._transcodeStream = newStreamName;
     this.player = new CamPlayer(this.video, newStreamName);
     this._bindPlayerEvents();
-    this.player.start();
+    this._switchPlayer(this.player);
   }
 
   /** Show loading spinner with status text. */
@@ -428,8 +508,9 @@ export class CameraView {
     this._loadingText.textContent = text;
     this._loading.style.display = 'flex';
 
-    // Show snapshot overlay again while reconnecting
-    if (this._snapshot && this._snapshot.classList.contains('loaded')) {
+    // Show snapshot overlay while reconnecting — but NOT during archive playback
+    // (snapshot is a live frame; showing it during archive seek is confusing)
+    if (this._snapshot && this._snapshot.classList.contains('loaded') && !this.isPlayback) {
       this._snapshot.classList.remove('loaded');
       this._snapshot.style.display = '';
       this._snapshot.src = `/backend/snapshot/${this.id}?t=${Date.now()}`;
@@ -449,7 +530,7 @@ export class CameraView {
     }
 
     // Poll for video render: check BOTH sd player and playback player
-    const activePlayer = this._playbackPlayer || this.player;
+    const activePlayer = this._activePlayer || this.player;
     if (activePlayer.enabled) this._startRenderCheck();
   }
 
@@ -463,6 +544,72 @@ export class CameraView {
       this._snapshot.classList.add('loaded');
       console.log(`[snapshot] ${this.id}: fading out (video playing)`);
     }
+    // Restore audio if in fullscreen — WebRTC ontrack always sets muted=true for autoplay policy.
+    if (this.el.classList.contains('fullscreen') && !CameraView.globalMute && !this._awaitingUserPlay) {
+      this._tryUnmute();
+    }
+  }
+
+  /**
+   * Pause video and show play overlay — waits for user click to unmute + play.
+   * Used for deep links where there's no prior user interaction (autoplay policy).
+   */
+  awaitUserPlay() {
+    this._awaitingUserPlay = true;
+    // Wait for video to actually have data, then pause
+    const waitAndPause = () => {
+      if (!this._awaitingUserPlay) return;
+      if (this.video.readyState >= 2) { // HAVE_CURRENT_DATA
+        this.video.pause();
+        this._showPauseIndicator('pause');
+      } else {
+        setTimeout(waitAndPause, 200);
+      }
+    };
+    setTimeout(waitAndPause, 500);
+
+    // One-time click on the camera element → unmute + play
+    // Must use capture + stopImmediatePropagation because fullscreen toggle
+    // is also on this.el — stopPropagation alone doesn't block sibling handlers
+    const handler = (e) => {
+      e.stopImmediatePropagation();
+      e.preventDefault();
+      if (!this._awaitingUserPlay) return;
+      this._awaitingUserPlay = false;
+      this.video.muted = false;
+      this.video.play().catch(() => {});
+      this._audioIcon.classList.toggle('unmuted', this._audioIcon.classList.contains('has-audio'));
+      this._showPauseIndicator('play');
+    };
+    this.el.addEventListener('click', handler, { once: true, capture: true });
+  }
+
+  /** Try to unmute; if autoplay policy blocks it, defer to first user click. */
+  _tryUnmute() {
+    const hasAudio = this._audioIcon.classList.contains('has-audio');
+    if (!hasAudio) return;
+
+    this.video.muted = false;
+    const p = this.video.play();
+    if (p && p.catch) {
+      p.catch(() => {
+        // Autoplay policy: no user interaction yet — stay muted, unmute on first click
+        this.video.muted = true;
+        this._audioIcon.classList.remove('unmuted');
+        const unlock = () => {
+          document.removeEventListener('click', unlock, { capture: true });
+          document.removeEventListener('keydown', unlock, { capture: true });
+          if (this.el.classList.contains('fullscreen') && !CameraView.globalMute) {
+            this.video.muted = false;
+            this.video.play().catch(() => {});
+            this._audioIcon.classList.add('unmuted');
+          }
+        };
+        document.addEventListener('click', unlock, { capture: true, once: true });
+        document.addEventListener('keydown', unlock, { capture: true, once: true });
+      });
+    }
+    this._audioIcon.classList.toggle('unmuted', !this.video.muted);
   }
 
   /** Poll until video actually has frames, then hide loading. */
@@ -501,7 +648,7 @@ export class CameraView {
   /** Update bitrate display. Call periodically. */
   async updateBitrate() {
     // Use whichever player is active
-    const p = this._playbackPlayer || this._hdPlayer || this.player;
+    const p = this._activePlayer || this.player;
     await p.updateBitrate();
     const kbps = p.bitrate || 0;
 
@@ -537,6 +684,7 @@ export class CameraView {
       const v = this.video;
       if (v.videoWidth) parts.push(`${v.videoWidth}×${v.videoHeight}`);
       if (this.codec) parts.push(this.codec === 'hevc' ? 'H.265' : 'H.264');
+      if (this._zoom.scale > 1) parts.push(`${this._zoom.scale.toFixed(1)}×`);
       if (this.el.classList.contains('paused')) parts.push('PAUSED');
       const text = parts.join(' · ');
       this._infoTooltip.textContent = text;
@@ -586,7 +734,7 @@ export class CameraView {
   /** Sync MSE buffer to prevent lag buildup. */
   /** Sync MSE buffer — prevent live drift. Called periodically. */
   syncBuffer() {
-    const p = this._playbackPlayer || this._hdPlayer || this.player;
+    const p = this._activePlayer || this.player;
     // Only sync for MSE live streams, not playback (archive)
     if (p.mode !== 'mse' || this.isPlayback) return;
 
@@ -660,6 +808,12 @@ export class CameraView {
   onConnectionError = null;
 
   /**
+   * Called when go2rtc lost stream definition (needs recovery).
+   * @type {(camera: CameraView) => void}
+   */
+  onStreamNotFound = null;
+
+  /**
    * Called when archive playback is paused (stream should be destroyed).
    * @type {(camera: CameraView) => void}
    */
@@ -699,10 +853,16 @@ export class CameraView {
     this._clearPendingChange();
     // NOTE: freeze frame preserved here — cleared in _hideLoading when real frames arrive
 
-    // CRITICAL: stop previous playback player to prevent retry loops
+    // Clean up previous playback player
     if (this._playbackPlayer) {
       this._playbackPlayer.disable();
       this._playbackPlayer = null;
+    }
+    // Clean up HD if active
+    if (this._hdPlayer) {
+      this._hdPlayer.disable();
+      this._hdPlayer = null;
+      this._hdStream = null;
     }
 
     this._playbackStream = streamName;
@@ -715,13 +875,6 @@ export class CameraView {
     this._playbackStart = new Date();
     this._updateDateLabel();
 
-    this.player.disable();  // fully disable SD — prevent auto-reconnect during playback
-    // Stop HD if active — playback uses its own player
-    if (this._hdPlayer) {
-      this._hdPlayer.disable();
-      this._hdPlayer = null;
-      this._hdStream = null;
-    }
     this._showLoading('loading archive');
     this._playbackPlayer = new CamPlayer(this.video, streamName, { preferH265: forceMSE });
     this._playbackPlayer.onStatusChange = (online) => {
@@ -739,14 +892,12 @@ export class CameraView {
       }
     };
 
-    // HEVC playback: use MSE when backend says forceMSE OR config forces it
-    const useMSE = forceMSE && (window.__okoConfig?.playback_force_mse !== false);
-    if (useMSE) {
-      console.log(`[cam] ${this.id}: playback using MSE (forceMSE=${forceMSE}, config=${window.__okoConfig?.playback_force_mse})`);
-      this._playbackPlayer.startMSE();
-    } else {
-      this._playbackPlayer.start();
-    }
+    // HEVC streams: use MSE when browser lacks H.265 WebRTC support.
+    // CamPlayer.globalForceMSE (config) is handled inside start() for all streams.
+    const useMSE = forceMSE && !CamPlayer.h265WebRTCSupported;
+
+    // Atomic switch: stops old player, starts playback
+    this._switchPlayer(this._playbackPlayer, useMSE ? 'mse' : 'start');
 
     this.el.classList.add('playback-mode');
 
@@ -798,6 +949,7 @@ export class CameraView {
 
   /** Switch back to live. */
   stopPlayback() {
+    this._awaitingUserPlay = false;
     this.stopPlaybackTimer();
     clearInterval(this._nowMarkerTimer);
     this._clearFreezeFrame();
@@ -837,7 +989,8 @@ export class CameraView {
     liveBtn.classList.add('active');
     liveBtn.innerHTML = '&#9673; Live';
 
-    this.player.start();
+    // Atomic switch back to SD live
+    this._switchPlayer(this.player);
 
     // Restart LIVE grid HUD timer
     this._startGhudLive();
@@ -1066,6 +1219,360 @@ export class CameraView {
     this.el.querySelectorAll('.pending').forEach(el => el.classList.remove('pending'));
   }
 
+  // ── Digital zoom ──
+  //
+  // Model: transform-origin: 0 0; transform: translate(tx, ty) scale(S)
+  // tx, ty are in CSS pixels (screen space). At scale=1: tx=ty=0.
+  // Drag: tx += dx (screen pixels, 1:1).
+  // Zoom to cursor: keep image content under cursor fixed.
+
+  _applyZoom() {
+    const { scale, tx, ty } = this._zoom;
+    const transform = scale <= 1 ? '' : `translate(${tx}px, ${ty}px) scale(${scale})`;
+    const origin = scale <= 1 ? '' : '0 0';
+
+    // Apply to both video and freeze frame
+    this.video.style.transform = transform;
+    this.video.style.transformOrigin = origin;
+    const freeze = this.el.querySelector('.cam-freeze');
+    if (freeze) {
+      freeze.style.transform = transform;
+      freeze.style.transformOrigin = origin;
+    }
+
+    this.el.classList.toggle('cam-zoomed', scale > 1);
+
+    // Zoom level badge in top bar
+    const badge = this.el.querySelector('.cam-zoom-badge');
+    if (badge) {
+      badge.textContent = scale <= 1 ? '' : `${scale.toFixed(1)}×`;
+      badge.classList.toggle('visible', scale > 1);
+    }
+
+    // Update info-inline with zoom factor
+    if (this.isFullscreen) {
+      const p = this._activePlayer || this.player;
+      if (p) this._updateInfoTooltip(p, p.bitrate || 0);
+    }
+
+    // Minimap
+    this._updateMinimap();
+  }
+
+  _updateMinimap() {
+    const minimap = this.el.querySelector('.cam-minimap');
+    if (!minimap) return;
+
+    const { scale, tx, ty } = this._zoom;
+    if (scale <= 1) {
+      minimap.classList.remove('visible');
+      clearInterval(this._minimapTimer);
+      this._minimapTimer = null;
+      return;
+    }
+    minimap.classList.add('visible');
+
+    // Start periodic canvas refresh (video is live)
+    if (!this._minimapTimer) {
+      this._minimapTimer = setInterval(() => this._drawMinimapFrame(), 1000);
+    }
+    this._drawMinimapFrame();
+
+    // Viewport rectangle
+    const vp = minimap.querySelector('.cam-minimap-viewport');
+    const rect = this.el.getBoundingClientRect();
+    const w = rect.width, h = rect.height;
+    const canvas = minimap.querySelector('.cam-minimap-canvas');
+    const mw = canvas.width;
+    const mh = canvas.height;
+
+    const vx = -tx / scale;
+    const vy = -ty / scale;
+    const vw = w / scale;
+    const vh = h / scale;
+
+    vp.style.left = `${Math.max(0, (vx / w) * mw)}px`;
+    vp.style.top = `${Math.max(0, (vy / h) * mh)}px`;
+    vp.style.width = `${Math.min(mw, (vw / w) * mw)}px`;
+    vp.style.height = `${Math.min(mh, (vh / h) * mh)}px`;
+  }
+
+  _drawMinimapFrame() {
+    const canvas = this.el.querySelector('.cam-minimap-canvas');
+    if (!canvas || !this.video.videoWidth) return;
+    const ctx = canvas.getContext('2d');
+    const mw = canvas.width = 120;
+    const mh = canvas.height = Math.round(120 * (this.video.videoHeight / this.video.videoWidth));
+    canvas.style.height = `${mh}px`;
+    canvas.parentElement.style.height = `${mh + 2}px`;
+    try { ctx.drawImage(this.video, 0, 0, mw, mh); } catch {}
+  }
+
+  _resetZoom() {
+    this._zoom = { scale: 1, tx: 0, ty: 0 };
+    clearInterval(this._minimapTimer);
+    this._minimapTimer = null;
+    // Reset minimap position to default (top-right)
+    const mm = this.el.querySelector('.cam-minimap');
+    if (mm) { mm.style.left = ''; mm.style.right = ''; mm.style.top = ''; }
+    this._applyZoom();
+  }
+
+  /** Zoom to newScale keeping the screen point (cursorX, cursorY) px fixed. */
+  _setZoom(newScale, cursorX, cursorY) {
+    const s = this._zoom.scale;
+    newScale = Math.max(1, Math.min(8, newScale));
+    if (newScale <= 1) {
+      this._zoom = { scale: 1, tx: 0, ty: 0 };
+    } else {
+      // Keep content under cursor stationary:
+      // tx_new = cursorX * (1 - S2/S1) + tx_old * (S2/S1)
+      const ratio = newScale / s;
+      this._zoom.tx = cursorX * (1 - ratio) + this._zoom.tx * ratio;
+      this._zoom.ty = cursorY * (1 - ratio) + this._zoom.ty * ratio;
+      this._zoom.scale = newScale;
+      this._clampPan();
+    }
+    this._applyZoom();
+  }
+
+  _clampPan() {
+    const { scale } = this._zoom;
+    if (scale <= 1) { this._zoom.tx = 0; this._zoom.ty = 0; return; }
+    const rect = this.el.getBoundingClientRect();
+    const w = rect.width, h = rect.height;
+    // tx range: [-(scale-1)*w, 0]
+    this._zoom.tx = Math.max(-(scale - 1) * w, Math.min(0, this._zoom.tx));
+    this._zoom.ty = Math.max(-(scale - 1) * h, Math.min(0, this._zoom.ty));
+  }
+
+  _bindZoomEvents() {
+    // Wheel zoom (fullscreen only)
+    this.el.addEventListener('wheel', (e) => {
+      if (!this.isFullscreen) return;
+      e.preventDefault();
+      const rect = this.el.getBoundingClientRect();
+      const cursorX = e.clientX - rect.left;
+      const cursorY = e.clientY - rect.top;
+      const raw = -e.deltaY * 0.005;
+      const clamped = Math.max(-0.25, Math.min(0.25, raw));
+      this._setZoom(this._zoom.scale * (1 + clamped), cursorX, cursorY);
+    }, { passive: false });
+
+    // Mouse drag pan (fullscreen + zoomed)
+    this.el.addEventListener('mousedown', (e) => {
+      if (!this.isFullscreen || this._zoom.scale <= 1) return;
+      if (e.target.closest('.cam-seek-timeline, .cam-overlay, .cam-playback-panel, .cam-top-right, .cam-quality-toggle')) return;
+      this._zoomDragging = true;
+      this._zoomDragMoved = false;
+      this._zoomDragLast = { x: e.clientX, y: e.clientY };
+      this.el.classList.add('cam-zoom-dragging');
+      e.preventDefault();
+    });
+    document.addEventListener('mousemove', (e) => {
+      if (!this._zoomDragging) return;
+      this._zoomDragMoved = true;
+      // Direct 1:1 screen-pixel panning
+      this._zoom.tx += e.clientX - this._zoomDragLast.x;
+      this._zoom.ty += e.clientY - this._zoomDragLast.y;
+      this._zoomDragLast = { x: e.clientX, y: e.clientY };
+      this._clampPan();
+      this._applyZoom();
+    });
+    document.addEventListener('mouseup', () => {
+      if (this._zoomDragging) {
+        this._zoomDragging = false;
+        this.el.classList.remove('cam-zoom-dragging');
+        if (this._zoomDragMoved) {
+          const suppress = (e) => { e.stopPropagation(); e.preventDefault(); };
+          this.el.addEventListener('click', suppress, { capture: true, once: true });
+        }
+      }
+    });
+
+    // Touch pinch-to-zoom + pan
+    let lastPinchDist = 0;
+    let lastTouchCenter = null;
+    this.el.addEventListener('touchstart', (e) => {
+      if (!this.isFullscreen) return;
+      if (e.touches.length === 2) {
+        const [a, b] = [e.touches[0], e.touches[1]];
+        lastPinchDist = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+        const rect = this.el.getBoundingClientRect();
+        lastTouchCenter = {
+          x: (a.clientX + b.clientX) / 2 - rect.left,
+          y: (a.clientY + b.clientY) / 2 - rect.top
+        };
+      } else if (e.touches.length === 1 && this._zoom.scale > 1) {
+        lastTouchCenter = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+      }
+    }, { passive: true });
+
+    this.el.addEventListener('touchmove', (e) => {
+      if (!this.isFullscreen) return;
+      if (e.touches.length === 2 && lastPinchDist) {
+        // Pinch zoom
+        const [a, b] = [e.touches[0], e.touches[1]];
+        const dist = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+        const rect = this.el.getBoundingClientRect();
+        const cx = (a.clientX + b.clientX) / 2 - rect.left;
+        const cy = (a.clientY + b.clientY) / 2 - rect.top;
+        this._setZoom(this._zoom.scale * (dist / lastPinchDist), cx, cy);
+        lastPinchDist = dist;
+        lastTouchCenter = { x: cx, y: cy };
+        e.preventDefault();
+      } else if (e.touches.length === 1 && this._zoom.scale > 1 && lastTouchCenter) {
+        // Single-finger pan when zoomed
+        const t = e.touches[0];
+        this._zoom.tx += t.clientX - lastTouchCenter.x;
+        this._zoom.ty += t.clientY - lastTouchCenter.y;
+        lastTouchCenter = { x: t.clientX, y: t.clientY };
+        this._clampPan();
+        this._applyZoom();
+        e.preventDefault();
+      }
+    }, { passive: false });
+
+    this.el.addEventListener('touchend', () => {
+      if (lastPinchDist) lastPinchDist = 0;
+      lastTouchCenter = null;
+    }, { passive: true });
+
+    // Double-tap to toggle zoom (mobile)
+    let lastTapTime = 0;
+    this.el.addEventListener('touchend', (e) => {
+      if (!this.isFullscreen || e.touches.length > 0) return;
+      const now = Date.now();
+      if (now - lastTapTime < 300) {
+        e.preventDefault();
+        if (this._zoom.scale > 1) {
+          this._resetZoom();
+        } else {
+          const rect = this.el.getBoundingClientRect();
+          const t = e.changedTouches[0];
+          this._setZoom(3, t.clientX - rect.left, t.clientY - rect.top);
+        }
+        lastTapTime = 0;
+      } else {
+        lastTapTime = now;
+      }
+    });
+
+    // Minimap: drag to reposition widget, click to pan viewport
+    const minimap = this.el.querySelector('.cam-minimap');
+    if (minimap) {
+      let mmDragging = false;
+      let mmMoved = false;
+      let mmStart = { x: 0, y: 0, left: 0, top: 0 };
+
+      minimap.addEventListener('mousedown', (e) => {
+        e.stopPropagation();
+        e.preventDefault();
+        mmDragging = true;
+        mmMoved = false;
+        const style = minimap.getBoundingClientRect();
+        const parent = this.el.getBoundingClientRect();
+        // Convert from right-positioned to left-positioned for dragging
+        minimap.style.left = `${style.left - parent.left}px`;
+        minimap.style.right = 'auto';
+        mmStart = {
+          x: e.clientX, y: e.clientY,
+          left: style.left - parent.left,
+          top: style.top - parent.top
+        };
+      });
+
+      document.addEventListener('mousemove', (e) => {
+        if (!mmDragging) return;
+        const dx = e.clientX - mmStart.x;
+        const dy = e.clientY - mmStart.y;
+        if (Math.abs(dx) > 3 || Math.abs(dy) > 3) mmMoved = true;
+        if (mmMoved) {
+          minimap.style.left = `${mmStart.left + dx}px`;
+          minimap.style.top = `${mmStart.top + dy}px`;
+        }
+      });
+
+      document.addEventListener('mouseup', () => {
+        if (!mmDragging) return;
+        mmDragging = false;
+        // Suppress click after drag (prevents fullscreen exit)
+        if (mmMoved) {
+          const suppress = (e) => { e.stopPropagation(); e.preventDefault(); };
+          this.el.addEventListener('click', suppress, { capture: true, once: true });
+        }
+      });
+
+      // Click on minimap (no drag) → pan viewport to that point
+      minimap.addEventListener('click', (e) => {
+        e.stopPropagation(); // always prevent bubbling to cam click handler
+        if (mmMoved || this._zoom.scale <= 1) return;
+        const canvas = minimap.querySelector('.cam-minimap-canvas');
+        const mr = canvas.getBoundingClientRect();
+        const fx = (e.clientX - mr.left) / mr.width;
+        const fy = (e.clientY - mr.top) / mr.height;
+        const rect = this.el.getBoundingClientRect();
+        const s = this._zoom.scale;
+        this._zoom.tx = -(fx * rect.width * s - rect.width / 2);
+        this._zoom.ty = -(fy * rect.height * s - rect.height / 2);
+        this._clampPan();
+        this._applyZoom();
+      });
+    }
+
+    // Long-press quick actions menu (grid thumbnails only)
+    let longPressTimer = null;
+    this.el.addEventListener('touchstart', (e) => {
+      if (this.isFullscreen || e.touches.length !== 1) return;
+      longPressTimer = setTimeout(() => {
+        longPressTimer = null;
+        this._showQuickMenu();
+      }, 500);
+    }, { passive: true });
+    this.el.addEventListener('touchmove', () => { clearTimeout(longPressTimer); }, { passive: true });
+    this.el.addEventListener('touchend', () => { clearTimeout(longPressTimer); }, { passive: true });
+  }
+
+  _showQuickMenu() {
+    this._hideQuickMenu();
+    const menu = document.createElement('div');
+    menu.className = 'cam-quick-menu';
+    const actions = [
+      { label: '⛶', text: 'Open', action: () => { this._hideQuickMenu(); if (this.onClick) this.onClick(this); }},
+      { label: this.isPlayback ? '●' : '▶', text: this.isPlayback ? 'LIVE' : 'Archive', action: () => {
+        this._hideQuickMenu();
+        if (this.isPlayback) { if (this.onLiveRequest) this.onLiveRequest(this); }
+        else { this.togglePlaybackPanel(); }
+      }},
+      { label: this.video.muted ? '🔇' : '🔊', text: 'Audio', action: () => {
+        this._hideQuickMenu();
+        this.video.muted = !this.video.muted;
+        this._audioIcon.classList.toggle('unmuted', !this.video.muted);
+      }},
+      { label: '☑', text: 'Select', action: () => { this._hideQuickMenu(); this.toggleSelect(); }},
+    ];
+    for (const a of actions) {
+      const btn = document.createElement('button');
+      btn.className = 'cam-quick-btn';
+      btn.innerHTML = `<span style="font-size:16px">${a.label}</span>${a.text}`;
+      btn.addEventListener('click', (e) => { e.stopPropagation(); a.action(); });
+      menu.appendChild(btn);
+    }
+    this.el.appendChild(menu);
+    // Auto-hide after 4s
+    this._quickMenuTimer = setTimeout(() => this._hideQuickMenu(), 4000);
+    // Dismiss on outside tap
+    const dismiss = (e) => {
+      if (!menu.contains(e.target)) { this._hideQuickMenu(); document.removeEventListener('touchstart', dismiss); }
+    };
+    setTimeout(() => document.addEventListener('touchstart', dismiss), 100);
+  }
+
+  _hideQuickMenu() {
+    clearTimeout(this._quickMenuTimer);
+    this.el.querySelector('.cam-quick-menu')?.remove();
+  }
+
   // ── Private: DOM creation ──
 
   _createElement() {
@@ -1092,6 +1599,10 @@ export class CameraView {
         <svg viewBox="0 0 24 24" width="32" height="32" fill="white"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
       </div>
       <div class="cam-bitrate"></div>
+      <div class="cam-minimap">
+        <canvas class="cam-minimap-canvas"></canvas>
+        <div class="cam-minimap-viewport"></div>
+      </div>
       <div class="cam-select" title="Select for investigation (Ctrl+Click)">
         <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5">
           <polyline points="20 6 9 17 4 12"/>
@@ -1105,6 +1616,7 @@ export class CameraView {
         </div>
         <div class="cam-info-inline"></div>
         <div class="cam-top-right">
+          <span class="cam-zoom-badge"></span>
           <div class="cam-quality-toggle" title="Toggle SD/HD stream (H)">
             <span class="quality-opt quality-sd active">SD</span>
             <span class="quality-opt quality-hd">HD</span>
@@ -1263,6 +1775,10 @@ export class CameraView {
     this.player.onConnectionError = (name) => {
       if (this.onConnectionError) this.onConnectionError(this);
     };
+
+    this.player.onStreamNotFound = (name) => {
+      if (this.onStreamNotFound) this.onStreamNotFound(this);
+    };
   }
 
   _bindDOMEvents() {
@@ -1321,6 +1837,8 @@ export class CameraView {
 
     // Playback button — toggle panel
     const playbackBtn = this.el.querySelector('.cam-playback-btn');
+    // Stop mousedown on entire playback panel to prevent fullscreen toggle on long press
+    this.el.querySelector('.cam-playback-panel').addEventListener('mousedown', (e) => e.stopPropagation());
     playbackBtn.addEventListener('click', (e) => {
       e.stopPropagation();
       const panel = this.el.querySelector('.cam-playback-panel');
@@ -1382,6 +1900,7 @@ export class CameraView {
     // Live button
     const liveBtn = this.el.querySelector('.playback-live');
     liveBtn.classList.add('active'); // live by default
+    liveBtn.addEventListener('mousedown', (e) => e.stopPropagation());
     liveBtn.addEventListener('click', (e) => {
       e.stopPropagation();
       if (this.onLiveRequest) this.onLiveRequest(this);
@@ -1417,7 +1936,7 @@ export class CameraView {
     // Info tooltip on hover (grid mode)
     this.el.addEventListener('mouseenter', () => {
       if (this.el.classList.contains('fullscreen')) return;
-      const p = this._playbackPlayer || this._hdPlayer || this.player;
+      const p = this._activePlayer || this.player;
       if (!p || !p.connected) return;
       this._updateInfoTooltip(p, p.bitrate || 0);
       this._infoTooltip.classList.add('visible');
@@ -1572,9 +2091,10 @@ export class CameraView {
     const LIVE_HOLD_MS = 500;
 
     ghudLiveBtn.addEventListener('mousedown', (e) => {
-      e.stopPropagation();
+      e.stopImmediatePropagation();
       e.preventDefault();
       liveTriggered = false;
+      this._ghudLivePressing = true; // flag to suppress click on this.el
       ghudLiveBtn.classList.add('pressing');
       livePressTimer = setTimeout(() => {
         liveTriggered = true;
@@ -1587,15 +2107,21 @@ export class CameraView {
     });
 
     const cancelLivePress = (e) => {
-      e.stopPropagation();
+      e.stopImmediatePropagation();
       e.preventDefault();
       clearTimeout(livePressTimer);
       ghudLiveBtn.classList.remove('pressing');
+      // Suppress the next click on this.el (mouse may have drifted off button)
+      if (this._ghudLivePressing) {
+        this._ghudLivePressing = false;
+        const suppress = (ev) => { ev.stopImmediatePropagation(); ev.preventDefault(); };
+        this.el.addEventListener('click', suppress, { capture: true, once: true });
+      }
     };
     ghudLiveBtn.addEventListener('mouseup', cancelLivePress);
     ghudLiveBtn.addEventListener('mouseleave', cancelLivePress);
     ghudLiveBtn.addEventListener('click', (e) => {
-      e.stopPropagation();
+      e.stopImmediatePropagation();
       e.preventDefault();
     });
 

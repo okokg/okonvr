@@ -14,11 +14,13 @@ interface CameraEntry {
 class CameraRegistry {
   private map = new Map<string, CameraEntry>();
   private providers: { name: string; provider: NvrProvider; cameras: CameraConfig[]; config: NvrConfig }[] = [];
+  private nvrEntries: NvrEntry[] = [];
 
   /** Initialize from NVR entries (parsed from oko.yaml). */
   init(nvrs: NvrEntry[]) {
     this.map.clear();
     this.providers = [];
+    this.nvrEntries = nvrs;
 
     for (const nvr of nvrs) {
       const provider = createProvider(nvr.config);
@@ -34,6 +36,43 @@ class CameraRegistry {
     }
 
     console.log(`Camera registry: ${this.map.size} cameras across ${nvrs.length} NVR(s)`);
+  }
+
+  /** Update cameras for a specific NVR after re-discovery. Returns new camera IDs. */
+  updateNvr(nvrName: string, cameras: CameraConfig[]): string[] {
+    // Find existing provider entry
+    const pIdx = this.providers.findIndex(p => p.name === nvrName);
+    if (pIdx < 0) return [];
+
+    const pEntry = this.providers[pIdx];
+    const oldIds = new Set(pEntry.cameras.map(c => c.id));
+    const newIds: string[] = [];
+
+    // Update cameras list
+    pEntry.cameras = cameras;
+
+    // Update NvrEntry reference too
+    const nvrEntry = this.nvrEntries.find(n => n.name === nvrName);
+    if (nvrEntry) nvrEntry.cameras = cameras;
+
+    // Remove old entries for this NVR
+    for (const id of oldIds) {
+      this.map.delete(id);
+    }
+
+    // Add new/updated entries
+    for (const cam of cameras) {
+      if (this.map.has(cam.id)) continue;
+      this.map.set(cam.id, { camera: cam, provider: pEntry.provider, nvrName });
+      if (!oldIds.has(cam.id)) newIds.push(cam.id);
+    }
+
+    return newIds;
+  }
+
+  /** Get NvrEntry by name. */
+  getNvrEntry(name: string): NvrEntry | undefined {
+    return this.nvrEntries.find(n => n.name === name);
   }
 
   /** Get provider for a camera ID. */
