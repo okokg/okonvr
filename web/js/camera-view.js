@@ -1313,6 +1313,10 @@ export class CameraView {
   startPlayback(streamName, startTime, endTime, forceMSE = false, resolution = 'original') {
     this.stopPlaybackTimer();
     this._clearPendingChange();
+    // Stop intercom — not available in archive mode
+    if (this._state.talkback.active || this._state.talkback.locked) {
+      this.stopTalkback(true);
+    }
     // NOTE: freeze frame preserved here — cleared in _hideLoading when real frames arrive
 
     // Clean up previous playback player
@@ -2198,17 +2202,19 @@ export class CameraView {
       </button>
       <div class="cam-grid-hud">
         <div class="ghud-info">
-          <span class="ghud-name">${this.id}</span>
-          <div class="ghud-audio-wrap">
-            <svg class="ghud-audio" viewBox="0 0 24 24" fill="white">
-              <path d="M14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77zM16.5 12c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM3 9v6h4l5 5V4L7 9H3z"/>
-            </svg>
-          </div>
-          <div class="ghud-mic-wrap">
-            <svg class="ghud-mic" viewBox="0 0 24 24" fill="white">
-              <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm-1-9c0-.55.45-1 1-1s1 .45 1 1v6c0 .55-.45 1-1 1s-1-.45-1-1V5zm6 6c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/>
-            </svg>
-          </div>
+          <span class="ghud-pill">
+            <span class="ghud-name">${this.id}</span>
+            <div class="ghud-audio-wrap">
+              <svg class="ghud-audio" viewBox="0 0 24 24" fill="white">
+                <path d="M14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77zM16.5 12c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM3 9v6h4l5 5V4L7 9H3z"/>
+              </svg>
+            </div>
+            <div class="ghud-mic-wrap">
+              <svg class="ghud-mic" viewBox="0 0 24 24" fill="white">
+                <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm-1-9c0-.55.45-1 1-1s1 .45 1 1v6c0 .55-.45 1-1 1s-1-.45-1-1V5zm6 6c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/>
+              </svg>
+            </div>
+          </span>
           <span class="ghud-status">
             <span class="ghud-rec-dot"></span>
             <span class="ghud-rec-label">REC</span>

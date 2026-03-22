@@ -32,26 +32,34 @@
 
 ```
 backend/src/
-├── index.ts                 # bootstrap, discovery, probe
-├── config.ts                # YAML loader, channel parser
+├── index.ts                 # bootstrap, discovery, probe, talkback detection
+├── config.ts                # YAML loader, channel parser, talkback_channels
 ├── db.ts                    # SQLite setup + migrations
 ├── providers/
-│   ├── types.ts             # NvrProvider interface
+│   ├── types.ts             # NvrProvider interface (incl. detectTalkback, getTalkbackSource)
 │   ├── index.ts             # createProvider() factory
-│   ├── hikvision.ts         # Hikvision URLs + ISAPI discovery
-│   ├── dahua.ts             # Dahua URLs + CGI discovery
+│   ├── hikvision.ts         # Hikvision URLs + ISAPI discovery + TwoWayAudio detection
+│   ├── dahua.ts             # Dahua URLs + CGI discovery + direct camera RTSP for talkback
 │   └── generic.ts           # User-defined URLs
 ├── services/
-│   ├── camera-registry.ts   # Maps camera ID → provider
+│   ├── camera-registry.ts   # Maps camera ID → provider, detectAllTalkback(), hasTalkback()
 │   ├── stream-manager.ts    # go2rtc stream lifecycle
 │   ├── codec-prober.ts      # ffprobe + SQLite cache
 │   ├── go2rtc-config.ts     # Generates go2rtc.yaml
 │   ├── config-watcher.ts    # Hot reload (fs.watch)
-│   └── config-store.ts      # UI config singleton
+│   ├── config-store.ts      # UI config singleton
+│   ├── nvr-health.ts        # NVR connectivity monitoring
+│   ├── snapshot-cache.ts    # Snapshot/thumbnail caching
+│   └── server-activity.ts   # Server activity tracking
 ├── routes/
-│   ├── cameras.ts           # GET/PUT cameras
+│   ├── cameras.ts           # GET/PUT cameras (incl. has_talkback field)
 │   ├── playback.ts          # POST/DELETE playback streams
 │   ├── hd-stream.ts         # POST/DELETE HD streams
+│   ├── talkback.ts          # POST /talkback/:camera/start, DELETE /talkback/:camera/stop
+│   ├── playback-thumbnail.ts # GET thumbnail frames for seek preview
+│   ├── snapshots.ts         # GET camera snapshots
+│   ├── stats.ts             # GET stream statistics
+│   ├── transcode.ts         # POST transcode requests
 │   └── health.ts            # Health, config, reset-codecs
 └── utils/
     ├── url-encoder.ts       # go2rtc URL encoding

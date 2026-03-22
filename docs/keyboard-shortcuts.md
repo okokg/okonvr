@@ -41,6 +41,33 @@ Focus is set on the first camera at page load. Arrow keys work immediately.
 | `F` | Toggle native browser fullscreen |
 | `P` | Open/close archive playback panel |
 | `M` | Mute/unmute this camera |
+| `V` | Toggle intercom / talkback (lock mode) |
+| `Z` | Reset zoom to 1× |
+| `+` / `=` | Zoom in (2×, 3×, 4×) |
+| `-` | Zoom out |
+
+## Intercom (Talkback)
+
+| Action | Result |
+|--------|--------|
+| `V` in fullscreen | Toggle intercom on/off (lock mode) |
+| Click mic icon (status bar) | Toggle intercom on/off |
+| Hold PTT button (right side) | Push-to-talk (hold mode) |
+| Double-click PTT button | Lock intercom on (toggle mode) |
+
+When intercom is active: camera audio auto-enables, red border appears around camera cell, mic icons turn red.
+
+## Zoom (Digital)
+
+| Action | Result |
+|--------|--------|
+| `+` / `=` | Zoom in (2× → 3× → 4×) |
+| `-` | Zoom out (4× → 3× → 2× → 1×) |
+| `Z` | Reset to 1× |
+| Mouse wheel (in fullscreen) | Zoom in/out centered on cursor |
+| Click + drag (when zoomed) | Pan the zoomed view |
+
+A minimap appears in the corner when zoomed showing the visible area.
 
 ## Mute Behavior
 
@@ -51,21 +78,8 @@ Focus is set on the first camera at page load. Arrow keys work immediately.
 | `M` (unmute) in grid | Only the focused camera (white border) unmutes |
 | Click audio icon | Unmutes that camera, clears global mute |
 | Enter fullscreen | Audio auto-unmutes (if not globally muted) |
-| Exit fullscreen | Audio muted |
+| Exit fullscreen | Audio muted (unless intercom is active) |
 
 ## Modifier Keys
 
-All single-key shortcuts ignore `Ctrl` and `Cmd` to avoid conflicts with browser shortcuts:
-
-| Combo | Browser action (not intercepted) |
-|-------|--------------------------------|
-| `Ctrl+C` | Copy |
-| `Ctrl+R` | Reload page |
-| `Ctrl+T` | New tab |
-| `Ctrl+F` | Browser find |
-| `Ctrl+H` | Browser history |
-| `Ctrl+P` | Print |
-
-## Search Field
-
-When the search input is focused, all keyboard shortcuts are disabled — typing works normally. Click outside or press `Esc` to return to shortcut mode.
+All single-key shortcuts ignore `Ctrl` and `Cmd` to avoid conflicts with browser shortcuts. Layout-independent: uses `event.code` (physical key position) not `event.key` (character), so shortcuts work on any keyboard layout (QWERTY, AZERTY, Cyrillic, etc).

@@ -1012,6 +1012,11 @@ body {
 .cam.kbd-focus { z-index: 2; box-shadow: 0 0 0 3px #fff; }
 .cam.playback-mode .cam-overlay { background: linear-gradient(transparent, rgba(80, 50, 0, 0.7)); }
 
+/* Intercom unavailable in archive mode */
+.cam.playback-mode .cam-ptt,
+.cam.playback-mode .cam-mic-status,
+.cam.playback-mode .ghud-mic-wrap { display: none !important; }
+
 /* NVR offline state */
 .cam.nvr-offline { opacity: 0.4; }
 .cam.nvr-offline.fullscreen { opacity: 1; background: #000; }
@@ -1621,7 +1626,7 @@ body {
   display: flex;
   align-items: center;
   gap: 4px;
-  padding: 2px 6px;
+  padding: 2px 6px 2px 2px;
   background: transparent;
   font-family: var(--mono);
   font-size: 8px;
@@ -1630,18 +1635,20 @@ body {
   transition: background 0.15s;
 }
 
-/* Idle capsule behind name+dot+audio */
-.ghud-info::before {
-  content: '';
-  position: absolute;
-  left: 2px;
-  top: 1px;
-  bottom: 1px;
-  width: 56px;
-  background: rgba(0, 0, 0, 0.7);
-  border-radius: 8px;
-  z-index: -1;
-  transition: opacity 0.15s;
+/* Idle capsule: wraps name + audio + mic icons with dark scrim */
+.ghud-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  background: rgba(0, 0, 0, 0.65);
+  border-radius: 4px;
+  padding: 1px 4px 1px 1px;
+  transition: background 0.15s;
+}
+/* No icons → no right padding needed */
+.ghud-pill:not(:has(.ghud-audio-wrap.has-audio)):not(:has(.ghud-mic-wrap.has-talkback)) {
+  padding-right: 1px;
+  background: transparent;
 }
 
 .cam:hover .ghud-info,
@@ -1649,9 +1656,9 @@ body {
   background: #0a0a0c;
 }
 
-.cam:hover .ghud-info::before,
-.cam.cam-selected .ghud-info::before {
-  opacity: 0;
+.cam:hover .ghud-pill,
+.cam.cam-selected .ghud-pill {
+  background: transparent;
 }
 
 /* Hide details in idle via visibility (keeps layout stable) */
@@ -1691,12 +1698,19 @@ body {
 .ghud-name {
   font-weight: 700;
   font-size: 8px;
-  color: var(--group-text, #fff);
-  background: var(--group-bg, rgba(0, 0, 0, 0.5));
-  border: 1px solid var(--group-border, rgba(255, 255, 255, 0.15));
+  color: rgba(255, 255, 255, 0.5);
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid transparent;
   padding: 0 4px;
   border-radius: 2px;
   white-space: nowrap;
+  transition: color 0.15s, background 0.15s, border-color 0.15s;
+}
+.cam:hover .ghud-name,
+.cam.cam-selected .ghud-name {
+  color: var(--group-text, #fff);
+  background: var(--group-bg, rgba(0, 0, 0, 0.5));
+  border-color: var(--group-border, rgba(255, 255, 255, 0.15));
 }
 
 /* Ghud audio icon — next to camera name */

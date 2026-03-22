@@ -78,7 +78,16 @@ nvrs:
     channels: "*, !12, !32"        # channel selection (see below)
     sub_stream_suffix: "02"        # sub-stream suffix (default 02)
     main_stream_suffix: "01"       # main-stream suffix (default 01)
+    talkback_channels: [5, 8]      # manual talkback override (optional)
 ```
+
+#### talkback_channels
+
+By default, talkback-capable cameras are auto-detected from the NVR API:
+- **Dahua:** `RemoteDevice` → model name contains `-AS-` (speaker) or `-PV-` (siren/deterrence)
+- **Hikvision:** ISAPI `/System/TwoWayAudio/channels` → channel IDs with TwoWayAudio support
+
+`talkback_channels` overrides are **merged** with auto-detected channels (union). Use this when auto-detection misses a camera, or to manually add channels.
 
 #### Channel syntax
 
