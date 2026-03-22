@@ -21,6 +21,7 @@ export async function cameraRoutes(fastify: FastifyInstance) {
         sort_order: meta?.sort_order ?? i,
         codec: codec || null,
         has_audio: !!(audio && audio !== 'none' && audio !== 'unknown' && audio !== ''),
+        has_talkback: registry.hasTalkback(id),
       };
     });
     cameras.sort((a, b) => a.sort_order - b.sort_order);

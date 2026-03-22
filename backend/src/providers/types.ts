@@ -36,6 +36,8 @@ export interface NvrEntry {
   discover: boolean;
   /** Channel numbers to exclude after discovery */
   exclude: number[];
+  /** Manual talkback channel override (from oko.yaml). Empty = auto-detect only. */
+  talkback_channels: number[];
 }
 
 export interface CodecInfo {
@@ -97,7 +99,19 @@ export interface NvrProvider {
    * Returns discovered cameras with channel numbers and optional names.
    * Returns null if discovery is not supported or failed.
    */
-  discoverChannels(): Promise<DiscoveredCamera[] | null>;
+  discoverChannels(): Promise<DiscoveredCamera[]  | null>;
+
+  /**
+   * Detect which channels support two-way audio (talkback).
+   * Returns set of channel numbers that have talkback capability.
+   */
+  detectTalkback(): Promise<Set<number>>;
+
+  /**
+   * Get go2rtc source URL for talkback (main stream with backchannel).
+   * Returns null if not supported.
+   */
+  getTalkbackSource(camera: CameraConfig): string | null;
 }
 
 /** Camera discovered from NVR API. */

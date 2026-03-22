@@ -495,11 +495,14 @@ body {
   top: 4px;
   right: 4px;
   display: flex;
-  gap: 4px;
+  gap: 6px;
   align-items: center;
   pointer-events: none;
   z-index: 20;
 }
+
+/* Extra gap between audio/mic icons and SD/HD toggle */
+.cam-top-right .cam-audio-wrap { margin-right: 2px; }
 
 .cam-audio-wrap {
   position: relative;
@@ -514,6 +517,31 @@ body {
 .cam-audio-wrap.has-audio { opacity: 1; }
 .cam-audio-wrap.unmuted { opacity: 1 !important; }
 
+/* Mic status indicator in top-right bar — like audio icon pattern */
+.cam-mic-status {
+  position: relative;
+  width: 20px; height: 20px;
+  pointer-events: auto;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.3s;
+  display: none;
+}
+.cam-mic-status.has-talkback { display: block; opacity: 1; }
+.cam-mic-status svg {
+  width: 20px; height: 20px;
+  fill: rgba(255,255,255,0.4);
+  filter: drop-shadow(0 1px 2px rgba(0,0,0,0.8));
+  transition: fill 0.2s;
+}
+.cam:hover .cam-mic-status.has-talkback svg { fill: rgba(255,255,255,0.7); }
+.cam-mic-status.connecting svg { fill: rgba(239,83,80,0.8) !important; animation: mic-blink 0.6s ease-in-out infinite; }
+.cam-mic-status.active svg { fill: #ef5350 !important; animation: none; }
+.cam.fullscreen .cam-mic-status { width: 22px; height: 22px; }
+.cam.fullscreen .cam-mic-status svg { width: 22px; height: 22px; }
+.cam.fullscreen .cam-mic-status.has-talkback { opacity: 1; }
+@keyframes mic-blink { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
+
 .cam-audio {
   width: 20px;
   height: 20px;
@@ -527,39 +555,141 @@ body {
 .cam-audio-wrap.has-audio .cam-audio { fill: rgba(255, 255, 255, 0.4); opacity: 1; }
 .cam:hover .cam-audio-wrap.has-audio .cam-audio { fill: rgba(255, 255, 255, 0.7); }
 
-/* unmuted: bright blue icon */
+/* unmuted: bright blue icon — no pulse, clean solid */
 .cam-audio-wrap.unmuted .cam-audio { fill: #4fc3f7 !important; opacity: 1 !important; }
 
-/* Glow ring behind audio icon */
-.cam-audio-wrap::before {
-  content: '';
+/* ── PTT (push-to-talk) — standalone overlay ── */
+/* Both grid and fullscreen: right side, vertically centered */
+.cam-ptt {
+  display: none;
   position: absolute;
-  top: 50%; left: 50%;
-  transform: translate(-50%, -50%);
-  width: 32px; height: 32px;
-  border-radius: 50%;
-  background: transparent;
+  z-index: 25;
+  pointer-events: auto;
+  cursor: pointer;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
   opacity: 0;
   transition: opacity 0.3s;
 }
+.cam-ptt.has-talkback { display: flex; }
+.cam:hover .cam-ptt.has-talkback { opacity: 1; }
+.cam-ptt.connecting, .cam-ptt.active, .cam-ptt.locked { opacity: 1 !important; }
 
-/* has-audio muted: no glow */
-.cam-audio-wrap.has-audio::before {
-  opacity: 0;
-  animation: none;
+/* The circle button */
+.cam-ptt-circle {
+  position: relative;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s;
+  position: relative;
 }
 
-/* unmuted: pulsing glow */
-.cam-audio-wrap.unmuted::before {
-  background: rgba(79, 195, 247, 0.35);
-  opacity: 1;
-  animation: audio-pulse-active 1.5s ease-in-out infinite;
+/* ── Grid sizing ── */
+.cam:not(.fullscreen) .cam-ptt-circle {
+  width: 32px; height: 32px;
+  background: rgba(255,255,255,0.1);
+  border: 1.5px solid rgba(255,255,255,0.25);
+}
+.cam:not(.fullscreen) .cam-ptt-circle svg { width: 16px; height: 16px; fill: rgba(255,255,255,0.5); }
+.cam:not(.fullscreen):hover .cam-ptt-circle {
+  background: rgba(255,255,255,0.15);
+  border-color: rgba(255,255,255,0.4);
+}
+.cam:not(.fullscreen):hover .cam-ptt-circle svg { fill: rgba(255,255,255,0.8); }
+
+/* ── Fullscreen sizing ── */
+.cam.fullscreen .cam-ptt { right: 16px; }
+.cam.fullscreen .cam-ptt-circle {
+  width: 52px; height: 52px;
+  background: rgba(255,255,255,0.1);
+  border: 2px solid rgba(255,255,255,0.25);
+}
+.cam.fullscreen .cam-ptt-circle svg { width: 26px; height: 26px; fill: rgba(255,255,255,0.6); }
+.cam.fullscreen:hover .cam-ptt-circle {
+  background: rgba(255,255,255,0.15);
+  border-color: rgba(255,255,255,0.5);
+}
+.cam.fullscreen:hover .cam-ptt-circle svg { fill: rgba(255,255,255,0.85); }
+
+/* ── Connecting state: spinning ring via pseudo-element (icon stays still) ── */
+.cam-ptt.connecting .cam-ptt-circle {
+  background: rgba(255,255,255,0.08) !important;
+  border-color: transparent !important;
+}
+.cam-ptt.connecting .cam-ptt-circle::after {
+  content: '';
+  position: absolute;
+  inset: -2px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  border-top-color: rgba(239,83,80,0.9);
+  border-right-color: rgba(239,83,80,0.3);
+  animation: ptt-spin 0.8s linear infinite;
+}
+.cam-ptt.connecting .cam-ptt-circle svg { fill: rgba(239,83,80,0.7) !important; }
+@keyframes ptt-spin { to { transform: rotate(360deg); } }
+
+/* ── Active state: red + pulse ── */
+.cam-ptt.active .cam-ptt-circle,
+.cam-ptt.locked .cam-ptt-circle {
+  background: rgba(239,83,80,0.9) !important;
+  border: none !important;
+  animation: ptt-ring 1.2s ease-in-out infinite;
+}
+.cam-ptt.active .cam-ptt-circle svg,
+.cam-ptt.locked .cam-ptt-circle svg { fill: white !important; }
+
+/* Grid active: slightly bigger */
+.cam:not(.fullscreen) .cam-ptt.active .cam-ptt-circle,
+.cam:not(.fullscreen) .cam-ptt.locked .cam-ptt-circle { width: 36px; height: 36px; }
+.cam:not(.fullscreen) .cam-ptt.active .cam-ptt-circle svg,
+.cam:not(.fullscreen) .cam-ptt.locked .cam-ptt-circle svg { width: 18px; height: 18px; }
+
+/* Locked: extra ring to distinguish from hold */
+.cam-ptt.locked .cam-ptt-circle {
+  box-shadow: 0 0 0 3px rgba(239,83,80,0.3) !important;
+  animation: none !important;
 }
 
-@keyframes audio-pulse-active {
-  0%, 100% { transform: translate(-50%, -50%) scale(0.8); opacity: 0.6; }
-  50% { transform: translate(-50%, -50%) scale(1.3); opacity: 1; }
+/* Red border on cam cell when PTT active — ::after renders above video */
+.cam.ptt-active { z-index: 2; }
+.cam.ptt-active::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border: 3px solid rgba(239,83,80,0.8);
+  pointer-events: none;
+  z-index: 30;
 }
+
+@keyframes ptt-ring {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(239,83,80,0.4); }
+  50% { box-shadow: 0 0 0 10px rgba(239,83,80,0); }
+}
+
+/* Timer: visible when active or locked */
+.cam-ptt-timer {
+  display: none;
+  font-family: var(--mono);
+  font-size: 8px;
+  font-weight: 500;
+  color: #fff;
+  background: rgba(239,83,80,0.85);
+  padding: 1px 5px;
+  border-radius: 8px;
+  letter-spacing: 0.5px;
+}
+.cam-ptt.active .cam-ptt-timer,
+.cam-ptt.locked .cam-ptt-timer { display: block; }
+.cam.fullscreen .cam-ptt-timer { font-size: 9px; padding: 1px 6px; }
+
+
 
 /* ── SD/HD Quality Toggle ── */
 .cam-quality-toggle {
@@ -1411,7 +1541,12 @@ body {
 /* Hide clutter in grid view (grid HUD replaces overlay) */
 .cam:not(.fullscreen) .cam-seek-timeline { display: none !important; }
 .cam:not(.fullscreen) .cam-overlay { display: none !important; }
-.cam:not(.fullscreen) .cam-top-right { display: none !important; }
+.cam:not(.fullscreen) .cam-top-right { opacity: 0; transition: opacity 0.3s; }
+.cam:not(.fullscreen):hover .cam-top-right { opacity: 1; }
+.cam:not(.fullscreen) .cam-top-right:has(.cam-audio-wrap.unmuted) { opacity: 1; }
+.cam:not(.fullscreen) .cam-top-right:has(.cam-quality-toggle.hd-active) { opacity: 1; }
+.cam:not(.fullscreen) .cam-top-right:has(.cam-mic-status.active) { opacity: 1; }
+.cam:not(.fullscreen) .cam-top-right:has(.cam-mic-status.connecting) { opacity: 1; }
 .cam:not(.fullscreen) .cam-info-tooltip { display: none !important; }
 
 /* Fullscreen: hide grid HUD, show seek-timeline */
@@ -1495,14 +1630,14 @@ body {
   transition: background 0.15s;
 }
 
-/* Idle capsule behind name+dot */
+/* Idle capsule behind name+dot+audio */
 .ghud-info::before {
   content: '';
   position: absolute;
   left: 2px;
   top: 1px;
   bottom: 1px;
-  width: 42px;
+  width: 56px;
   background: rgba(0, 0, 0, 0.7);
   border-radius: 8px;
   z-index: -1;
@@ -1525,8 +1660,15 @@ body {
 .cam-grid-hud .ghud-spacer,
 .cam-grid-hud .ghud-day-prev,
 .cam-grid-hud .ghud-day-next,
-.cam-grid-hud .ghud-date {
+.cam-grid-hud .ghud-date,
+.cam-grid-hud .ghud-quality {
   visibility: hidden;
+}
+/* Always show quality when HD active, loading, or in playback (resolution) */
+.cam-grid-hud .ghud-quality:has(.ghud-q-hd.active),
+.cam-grid-hud .ghud-quality:has(.loading),
+.cam.playback-mode .cam-grid-hud .ghud-quality {
+  visibility: visible;
 }
 
 .cam:hover .cam-grid-hud .ghud-rec-label,
@@ -1535,12 +1677,14 @@ body {
 .cam:hover .cam-grid-hud .ghud-day-prev,
 .cam:hover .cam-grid-hud .ghud-day-next,
 .cam:hover .cam-grid-hud .ghud-date,
+.cam:hover .cam-grid-hud .ghud-quality,
 .cam.cam-selected .cam-grid-hud .ghud-rec-label,
 .cam.cam-selected .cam-grid-hud .ghud-time,
 .cam.cam-selected .cam-grid-hud .ghud-spacer,
 .cam.cam-selected .cam-grid-hud .ghud-day-prev,
 .cam.cam-selected .cam-grid-hud .ghud-day-next,
-.cam.cam-selected .cam-grid-hud .ghud-date {
+.cam.cam-selected .cam-grid-hud .ghud-date,
+.cam.cam-selected .cam-grid-hud .ghud-quality {
   visibility: visible;
 }
 
@@ -1553,6 +1697,82 @@ body {
   padding: 0 4px;
   border-radius: 2px;
   white-space: nowrap;
+}
+
+/* Ghud audio icon — next to camera name */
+.ghud-audio-wrap {
+  width: 12px; height: 12px;
+  cursor: pointer;
+  pointer-events: auto;
+  display: none;
+}
+.ghud-audio-wrap.has-audio { display: block; }
+.ghud-audio {
+  width: 12px; height: 12px;
+  fill: rgba(255,255,255,0.25);
+  transition: fill 0.2s;
+}
+.ghud-audio-wrap.has-audio .ghud-audio { fill: rgba(255,255,255,0.35); }
+.cam:hover .ghud-audio-wrap.has-audio .ghud-audio { fill: rgba(255,255,255,0.6); }
+.ghud-audio-wrap.unmuted .ghud-audio { fill: #4fc3f7 !important; }
+
+/* Ghud talkback mic indicator — hidden unless has-talkback, red when active */
+.ghud-mic-wrap {
+  width: 12px; height: 12px;
+  cursor: pointer;
+  pointer-events: auto;
+  display: none;
+}
+.ghud-mic-wrap.has-talkback { display: block; }
+.ghud-mic {
+  width: 12px; height: 12px;
+  fill: rgba(255,255,255,0.25);
+  transition: fill 0.2s;
+}
+.ghud-mic-wrap.has-talkback .ghud-mic { fill: rgba(255,255,255,0.35); }
+.cam:hover .ghud-mic-wrap.has-talkback .ghud-mic { fill: rgba(255,255,255,0.6); }
+.ghud-mic-wrap.connecting .ghud-mic { fill: rgba(239,83,80,0.8) !important; animation: mic-blink 0.6s ease-in-out infinite; }
+.ghud-mic-wrap.active .ghud-mic { fill: #ef5350 !important; animation: none; }
+
+/* Ghud SD/HD quality toggle — right side of info bar */
+.ghud-quality {
+  display: flex;
+  border-radius: 2px;
+  overflow: hidden;
+  border: 1px solid rgba(255,255,255,0.12);
+  cursor: pointer;
+  pointer-events: auto;
+  margin-left: auto;
+}
+.ghud-quality span {
+  font-family: var(--mono);
+  font-size: 7px;
+  font-weight: 700;
+  padding: 1px 4px;
+  color: rgba(255,255,255,0.3);
+  background: transparent;
+  transition: all 0.2s;
+}
+.ghud-quality .ghud-q-sd.active { background: var(--accent); color: #fff; }
+.ghud-quality .ghud-q-hd.active { background: var(--warn); color: #fff; }
+.ghud-quality .ghud-q-res {
+  display: none;
+  padding: 1px 5px;
+  font-family: var(--mono);
+  font-size: 7px;
+  font-weight: 700;
+  color: var(--warn);
+  background: rgba(232,168,50,0.15);
+}
+.ghud-quality .ghud-q-sd.loading {
+  background-image: linear-gradient(to right, var(--accent) 50%, rgba(29,158,117,0.15) 50%) !important;
+  background-size: 200% 100% !important; color: #fff;
+  animation: quality-fill 3s linear forwards;
+}
+.ghud-quality .ghud-q-hd.loading {
+  background-image: linear-gradient(to right, var(--warn) 50%, rgba(232,168,50,0.15) 50%) !important;
+  background-size: 200% 100% !important; color: #fff;
+  animation: quality-fill 3s linear forwards;
 }
 
 .ghud-status {
@@ -1990,17 +2210,20 @@ body {
 /* Hide old floating info-tooltip in fullscreen */
 .cam.fullscreen .cam-info-tooltip { display: none !important; }
 
-/* Quality toggle + playback btn in top bar */
+/* Quality toggle + playback btn + audio in top bar */
 .cam.fullscreen .cam-top-right {
   position: static;
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   flex-shrink: 0;
 }
+.cam.fullscreen .cam-top-right .cam-audio-wrap { margin-right: 6px; }
 .cam.fullscreen .cam-quality-toggle { opacity: 1; }
 .cam.fullscreen .quality-opt { font-size: 10px; padding: 3px 7px; }
 .cam.fullscreen .cam-playback-btn { display: none; }
+.cam.fullscreen .cam-audio-wrap.has-audio { opacity: 1; }
+.cam.fullscreen .cam-audio { width: 22px; height: 22px; }
 
 /* Fullscreen: seek-timeline layout */
 .cam.fullscreen .cam-seek-timeline {

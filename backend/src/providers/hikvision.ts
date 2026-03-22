@@ -190,4 +190,38 @@ export class HikvisionProvider implements NvrProvider {
       return null;
     }
   }
+
+  /**
+   * Detect two-way audio channels via ISAPI.
+   * GET /ISAPI/System/TwoWayAudio/channels → <TwoWayAudioChannelList>
+   */
+  async detectTalkback(): Promise<Set<number>> {
+    const result = new Set<number>();
+    const url = `${this.httpBase}/ISAPI/System/TwoWayAudio/channels`;
+    try {
+      const { status, body } = await httpGet(url, this.auth);
+      console.log(`    TwoWayAudio/channels: HTTP ${status}, ${body?.length || 0}b`);
+      if (status !== 200 || !body) return result;
+
+      const blocks = body.match(/<TwoWayAudioChannel[\s\S]*?<\/TwoWayAudioChannel>/g) || [];
+      for (const block of blocks) {
+        const idMatch = block.match(/<id>(\d+)<\/id>/);
+        if (idMatch) {
+          result.add(parseInt(idMatch[1]));
+          console.log(`    TwoWayAudio: channel ${idMatch[1]}`);
+        }
+      }
+      if (result.size === 0) {
+        console.log(`    TwoWayAudio: 0 channels in ${blocks.length} blocks`);
+      }
+    } catch (e: any) {
+      console.log(`    TwoWayAudio: ${e.message}`);
+    }
+    return result;
+  }
+
+  getTalkbackSource(camera: CameraConfig): string | null {
+    // Hikvision: use ISAPI source for backchannel
+    return `isapi://${this.auth.username}:${this.auth.password}@${this.httpBase.replace('http://', '')}/`;
+  }
 }

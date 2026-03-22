@@ -164,6 +164,7 @@ export class CamPlayer {
     // retry
     this._retryTimer = null;
     this._iceTimeout = null;
+    this._iceDisconnectTimer = null;  // grace period before reconnect on ICE "disconnected"
     this._videoDecodeCheck = null;
     this._videoDecodeAttempts = 0;
     this._webrtcRetried = false;
@@ -238,6 +239,8 @@ export class CamPlayer {
   stop() {
     clearTimeout(this._retryTimer);
     clearTimeout(this._iceTimeout);
+    clearTimeout(this._iceDisconnectTimer);
+    this._iceDisconnectTimer = null;
     clearTimeout(this._videoDecodeCheck);
     this._videoDecodeAttempts = 0;
     this._closePeerConnection();
@@ -491,9 +494,36 @@ export class CamPlayer {
       if (!this.pc) return;
       const state = this.pc.iceConnectionState;
       console.log(`[player] ${this.name}: ICE state=${state}${this._elapsed()}`);
-      if (state === 'failed') {
+
+      if (state === 'connected') {
+        // ICE recovered (possibly from "disconnected") — cancel pending reconnect
+        clearTimeout(this._iceDisconnectTimer);
+        this._iceDisconnectTimer = null;
+        if (!this.connected) this._emitStatus(true);
+      } else if (state === 'disconnected') {
+        // Transient state — ICE often auto-recovers in 2-5s.
+        // Wait before reconnecting to avoid thundering herd with 46+ cameras.
+        if (!this._iceDisconnectTimer) {
+          const grace = 5000 + Math.random() * 3000; // 5-8s jitter
+          console.log(`[player] ${this.name}: ICE disconnected, waiting ${Math.round(grace / 1000)}s for recovery`);
+          this._iceDisconnectTimer = setTimeout(() => {
+            this._iceDisconnectTimer = null;
+            if (!this.pc || !this.enabled) return;
+            const current = this.pc.iceConnectionState;
+            if (current === 'disconnected' || current === 'failed' || current === 'closed') {
+              console.log(`[player] ${this.name}: ICE did not recover (state=${current}), reconnecting`);
+              this._emitStatus(false);
+              this._scheduleRetry();
+            }
+          }, grace);
+        }
+      } else if (state === 'failed') {
+        clearTimeout(this._iceDisconnectTimer);
+        this._iceDisconnectTimer = null;
         this._connectMSE();
-      } else if (state === 'disconnected' || state === 'closed') {
+      } else if (state === 'closed') {
+        clearTimeout(this._iceDisconnectTimer);
+        this._iceDisconnectTimer = null;
         this._emitStatus(false);
         this._scheduleRetry();
       }
@@ -784,7 +814,9 @@ export class CamPlayer {
     this._emitStage('reconnecting');
 
     const useMSE = CamPlayer.globalForceMSE || this.mode === 'mse' || this._codecMismatch;
-    const delay = this.retryDelay;
+    // Add jitter (±1.5s) to prevent thundering herd when many cameras reconnect simultaneously
+    const jitter = Math.round((Math.random() - 0.5) * 3000);
+    const delay = Math.max(1000, this.retryDelay + jitter);
 
     console.log(`[player] ${this.name}: retry in ${delay}ms (${useMSE ? 'MSE' : 'WebRTC'})`);
 

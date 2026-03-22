@@ -465,7 +465,8 @@ export class App {
           if (!meta) continue;
           if (meta.has_audio !== cam.hasAudio) {
             cam.hasAudio = meta.has_audio;
-            cam._audioIcon.classList.toggle('has-audio', meta.has_audio);
+            cam._state.audio.available = meta.has_audio;
+            cam._renderAudio();
           }
           if (meta.codec && meta.codec !== cam.codec) {
             cam.codec = meta.codec;
@@ -550,6 +551,31 @@ export class App {
 
     this.grid.onHdToggle = (cam, wantHd) => {
       this._toggleHd(cam, wantHd);
+    };
+
+    this.grid.onHdError = async (cam, streamName) => {
+      console.warn(`[app] ${cam.id}: HD failed (${streamName}), cleaning up backend stream`);
+      try { await this.api.deleteHdStream(cam.id); } catch (e) {}
+      this._showHint(`${cam.id}: HD failed, back to SD`);
+    };
+
+    // Talkback (push-to-talk)
+    this.grid.onTalkbackStart = async (cam) => {
+      try {
+        console.log(`[app] ${cam.id}: talkback start`);
+        const result = await this.api.startTalkback(cam.id);
+        this._showHint(`${cam.id}: mic active`);
+        return result.stream;
+      } catch (err) {
+        console.error(`[app] ${cam.id}: talkback failed: ${err.message}`);
+        this._showHint(`Talkback error: ${err.message}`);
+        return null;
+      }
+    };
+
+    this.grid.onTalkbackStop = async (cam) => {
+      console.log(`[app] ${cam.id}: talkback stop`);
+      await this.api.stopTalkback(cam.id).catch(() => {});
     };
 
     this.grid.onNeedTranscode = async (cam) => {
@@ -641,12 +667,8 @@ export class App {
     this.grid.onPlaybackPause = async (cam) => {
       if (!cam.isPlayback) return;
       const streamName = cam.playbackStreamName;
-      console.log(`[app] ${cam.id}: archive paused at ${cam._pausedPosition?.toLocaleTimeString()}, destroying ${streamName}`);
-      if (cam._playbackPlayer) {
-        cam._playbackPlayer.disable(); // img overlay covers video — safe to fully reset
-        cam._playbackPlayer = null;
-      }
-      cam._playbackStream = null;
+      console.log(`[app] ${cam.id}: archive paused at ${cam.pausedPosition?.toLocaleTimeString()}, destroying ${streamName}`);
+      cam.destroyPlaybackPlayer();
       await this.api.deletePlayback(streamName).catch(() => {});
       // Investigation mode: sync pause to all selected
       if (this.grid._investigationMode) {
@@ -960,14 +982,14 @@ export class App {
         if (muted) {
           // Mute all
           document.querySelectorAll('video').forEach(v => v.muted = true);
-          this.grid.cameras.forEach(c => c._audioIcon.classList.remove('unmuted'));
+          this.grid.cameras.forEach(c => c._setAudioUnmuted(false));
           this._showHint('Muted all');
         } else {
           // Unmute only active camera (fullscreen or focused)
           const activeCam = this.grid.fullscreenCamera || this.grid.focusedCamera;
           if (activeCam && activeCam.hasAudio) {
             activeCam.video.muted = false;
-            activeCam._audioIcon.classList.add('unmuted');
+            activeCam._setAudioUnmuted(true);
             this._showHint(`Unmuted ${activeCam.id}`);
           } else {
             this._showHint('Unmuted');
@@ -1038,7 +1060,7 @@ export class App {
           e.preventDefault();
           const v = cam.video;
           v.volume = Math.max(0, Math.min(1, v.volume + (code === 'ArrowUp' ? 0.1 : -0.1)));
-          if (v.muted && code === 'ArrowUp') { v.muted = false; cam._audioIcon.classList.add('unmuted'); }
+          if (v.muted && code === 'ArrowUp') { v.muted = false; cam._setAudioUnmuted(true); }
           this._showHint(`Vol ${Math.round(v.volume * 100)}%`);
           return;
         }
@@ -1059,8 +1081,7 @@ export class App {
         if (code === 'KeyH' && !e.ctrlKey && !e.metaKey) {
           if (!cam.isPlayback) {
             const wantHd = !cam.isHd;
-            const target = cam._qualityToggle?.querySelector(wantHd ? '.quality-hd' : '.quality-sd');
-            if (target && !target.classList.contains('active')) target.classList.add('loading');
+            cam._setQualityLoading(wantHd ? 'hd' : 'sd');
             this._toggleHd(cam, wantHd);
           }
           return;
@@ -1072,9 +1093,17 @@ export class App {
           return;
         }
 
+        // V = talkback toggle (voice, lock mode)
+        if (code === 'KeyV' && !e.ctrlKey && !e.metaKey) {
+          if (cam.hasTalkback) {
+            cam.toggleTalkback();
+          }
+          return;
+        }
+
         // Z = reset zoom
         if (code === 'KeyZ' && !e.ctrlKey) {
-          cam._resetZoom();
+          cam.resetZoom();
           this._showHint('Zoom 1×');
           return;
         }
@@ -1154,10 +1183,7 @@ export class App {
         this._showHint(`${cam.id} → HD`);
       } catch (err) {
         console.error(`[app] ${cam.id}: HD failed: ${err.message}`);
-        // Restore toggle state
-        cam._qualityToggle?.querySelectorAll('.loading').forEach(el => el.classList.remove('loading'));
-        cam._qualityToggle?.querySelector('.quality-sd')?.classList.add('active');
-        cam._pendingQuality = null;
+        cam.cancelQualityLoading();
         this._showHint(`HD error: ${err.message}`);
       }
     } else {
@@ -1259,7 +1285,7 @@ export class App {
     for (const cam of this.grid.cameras) {
       if (!cam.isSelected) {
         // Clean up backend streams before disabling
-        if (cam._hdStream) {
+        if (cam.hdStreamName) {
           this.api.deleteHdStream(cam.id).catch(() => {});
           hdCleaned++;
         }
@@ -1340,8 +1366,8 @@ export class App {
     console.log(`[investigation] Stopping. Cameras were: ${syncedIds.join(', ')}`);
     // 1. Kill all active streams: playback + SD + HD on every camera
     for (const cam of this.grid.cameras) {
-      if (cam._hdStream) this.api.deleteHdStream(cam.id).catch(() => {});
-      if (cam.isPlayback || cam._pausedPosition) this._stopPlayback(cam);
+      if (cam.hdStreamName) this.api.deleteHdStream(cam.id).catch(() => {});
+      if (cam.isPlayback || cam.pausedPosition) this._stopPlayback(cam);
       cam.disable();
     }
     // 2. Exit investigation mode (unhide all, clear selection)
@@ -1394,7 +1420,7 @@ export class App {
   }
 
   _syncLiveToSelected(sourceCam) {
-    const targets = this.grid.selectedCameras.filter(c => c !== sourceCam && (c.isPlayback || c._pausedPosition));
+    const targets = this.grid.selectedCameras.filter(c => c !== sourceCam && (c.isPlayback || c.pausedPosition));
     if (targets.length === 0) return;
     console.log(`[investigation] Sync LIVE from ${sourceCam.id} → ${targets.map(c => c.id).join(', ')}`);
     for (const cam of targets) {
@@ -1406,7 +1432,7 @@ export class App {
     const targets = this.grid.selectedCameras.filter(c => c !== sourceCam);
     console.log(`[investigation] Sync seek ${seekTime.toLocaleTimeString()} from ${sourceCam.id} → ${targets.map(c => c.id).join(', ')}`);
     for (const cam of targets) {
-      if (cam.isPlayback || cam._pausedPosition) {
+      if (cam.isPlayback || cam.pausedPosition) {
         this._seekPlayback(cam, seekTime);
       } else {
         const pad = (n) => String(n).padStart(2, '0');
@@ -1432,26 +1458,22 @@ export class App {
       cam._showPauseIndicator('pause');
       const hasFreezeFrame = cam.el.querySelector('.cam-freeze')?.classList.contains('visible');
       if (hasFreezeFrame) {
-        cam._pausedPosition = position ? new Date(position) : cam.playbackPosition;
+        cam.pausedPosition = position ? new Date(position) : cam.playbackPosition;
         const streamName = cam.playbackStreamName;
-        if (cam._playbackPlayer) {
-          cam._playbackPlayer.disable();
-          cam._playbackPlayer = null;
-        }
-        cam._playbackStream = null;
+        cam.destroyPlaybackPlayer();
         await this.api.deletePlayback(streamName).catch(() => {});
       }
     }
   }
 
   _syncResumeToSelected(sourceCam, position) {
-    const targets = this.grid.selectedCameras.filter(c => c !== sourceCam && c._pausedPosition);
+    const targets = this.grid.selectedCameras.filter(c => c !== sourceCam && c.pausedPosition);
     if (targets.length === 0) return;
     console.log(`[investigation] Sync resume from ${sourceCam.id} at ${position.toLocaleTimeString()} → ${targets.map(c => c.id).join(', ')}`);
     for (const cam of targets) {
       cam.el.classList.remove('paused');
       cam._showPauseIndicator('play');
-      cam._pausedPosition = null;
+      cam.pausedPosition = null;
       this._seekPlayback(cam, position);
     }
   }

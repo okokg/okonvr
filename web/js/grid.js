@@ -158,6 +158,9 @@ export class CameraGrid {
       view.onHdToggle = (cam, wantHd) => {
         if (this.onHdToggle) this.onHdToggle(cam, wantHd);
       };
+      view.onHdError = (cam, streamName) => {
+        if (this.onHdError) this.onHdError(cam, streamName);
+      };
       view.onNeedTranscode = (cam) => {
         if (this.onNeedTranscode) this.onNeedTranscode(cam);
       };
@@ -175,6 +178,13 @@ export class CameraGrid {
       };
       view.onSelect = (cam, selected) => {
         if (this.onSelect) this.onSelect(cam, selected);
+      };
+      view.onTalkbackStart = async (cam) => {
+        if (this.onTalkbackStart) return this.onTalkbackStart(cam);
+        return null;
+      };
+      view.onTalkbackStop = (cam) => {
+        if (this.onTalkbackStop) this.onTalkbackStop(cam);
       };
 
       this.cameras.push(view);
@@ -547,11 +557,8 @@ export class CameraGrid {
   }
 
   _handleDoubleClick(cam) {
-    if (document.fullscreenElement) {
-      document.exitFullscreen();
-    } else {
-      cam.enterNativeFullscreen();
-    }
+    // Native fullscreen only via F key
+    // Double-click on grid camera = no-op (single click already opens in-page fullscreen)
   }
 
   _handleDrop(fromId, toCam) {

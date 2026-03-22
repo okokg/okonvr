@@ -86,6 +86,100 @@ export class DahuaProvider implements NvrProvider {
     return /^[A-Za-z]\w{0,15}$/.test(id);
   }
 
+  /** Per-camera direct connection info (populated by detectTalkback). */
+  private cameraDirectInfo = new Map<number, { ip: string; user: string; pass: string; port: number }>();
+
+  /**
+   * Detect two-way audio channels.
+   *
+   * Primary: GET RemoteDevice → parse DeviceType for speaker indicators:
+   *   -AS- = Audio+Speaker (built-in speaker)
+   *   -PV- = Active Deterrence (siren+strobe, has speaker)
+   *   -AS-PV- = both
+   *
+   * Also stores per-camera IP/creds for direct talkback connection
+   * (NVR does not proxy RTSP backchannel).
+   */
+  async detectTalkback(): Promise<Set<number>> {
+    const result = new Set<number>();
+    this.cameraDirectInfo.clear();
+
+    try {
+      const url = `${this.httpBase}/cgi-bin/configManager.cgi?action=getConfig&name=RemoteDevice`;
+      const { status, body } = await httpGet(url, this.auth);
+      console.log(`    RemoteDevice: HTTP ${status}, ${body?.length || 0}b`);
+      if (status !== 200 || !body) return result;
+
+      // Group lines by camera index
+      const cameras = new Map<number, Map<string, string>>();
+      for (const line of body.split('\n')) {
+        const m = line.match(/NETCAMERA_INFO_(\d+)\.(\w+)=(.*)/);
+        if (!m) continue;
+        const idx = parseInt(m[1]);
+        if (!cameras.has(idx)) cameras.set(idx, new Map());
+        cameras.get(idx)!.set(m[2], m[3].trim());
+      }
+
+      for (const [idx, props] of cameras) {
+        const channel = idx + 1; // 0-based → 1-based
+        const model = props.get('DeviceType') || '';
+        const ip = props.get('Address') || '';
+        const user = props.get('UserName') || '';
+        const pass = props.get('Password') || '';
+        const rtspPort = parseInt(props.get('RtspPort') || '0') || 554;
+
+        // Store direct connection info for all cameras (useful for talkback)
+        if (ip && user) {
+          this.cameraDirectInfo.set(channel, { ip, user, pass, port: rtspPort });
+        }
+
+        // Check model for speaker capability
+        if (/-AS[-\s]|-PV[-\s]/i.test(model)) {
+          result.add(channel);
+          console.log(`    ch${channel}: ${model} @ ${ip} → speaker`);
+        }
+      }
+
+      if (result.size === 0) {
+        console.log(`    RemoteDevice: 0 cameras with speaker model`);
+      }
+    } catch (e: any) {
+      console.log(`    RemoteDevice: ${e.message}`);
+    }
+
+    // Fallback: Speak config (works on some standalone cameras)
+    if (result.size === 0) {
+      try {
+        const url = `${this.httpBase}/cgi-bin/configManager.cgi?action=getConfig&name=Speak`;
+        const { status, body } = await httpGet(url, this.auth);
+        if (status === 200 && body && body.includes('table.Speak')) {
+          for (const line of body.split('\n')) {
+            const m = line.match(/table\.Speak\[(\d+)\]\.Enable=true/i);
+            if (m) result.add(parseInt(m[1]) + 1);
+          }
+          if (result.size > 0) console.log(`    Speak: ${result.size} channels`);
+        }
+      } catch {}
+    }
+
+    return result;
+  }
+
+  getTalkbackSource(camera: CameraConfig): string | null {
+    // Talkback requires direct connection to camera (NVR doesn't proxy backchannel)
+    // and proto=Onvif for Dahua to advertise the sendonly backchannel track
+    const info = this.cameraDirectInfo.get(camera.channel);
+    if (info && info.ip) {
+      const port = info.port || 554;
+      console.log(`[talkback] ${camera.id}: direct → ${info.ip}:${port}`);
+      return `rtsp://${this.auth.username}:${this.auth.password}@${info.ip}:${port}/cam/realmonitor?channel=1&subtype=0&unicast=true&proto=Onvif#backchannel=1`;
+    }
+
+    // Fallback: try through NVR (unlikely to work for backchannel)
+    console.log(`[talkback] ${camera.id}: no direct IP, falling back to NVR`);
+    return `${this.rtspBase}/cam/realmonitor?channel=${camera.channel}&subtype=0&unicast=true&proto=Onvif#backchannel=1`;
+  }
+
   /**
    * Discover cameras via CGI: GET /cgi-bin/configManager.cgi?action=getConfig&name=ChannelTitle
    * Supports both Basic and Digest auth automatically.

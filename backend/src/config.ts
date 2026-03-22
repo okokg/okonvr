@@ -166,12 +166,20 @@ function parseNvrEntry(n: any): NvrEntry {
   // Detect discovery mode: no channels, or channels contains "*"
   const hasWildcard = channelsStr === '' || channelsStr.includes('*');
 
+  // Parse talkback_channels: [1, 5, 7] or "1, 5, 7"
+  const tbRaw = n.talkback_channels;
+  const talkback_channels: number[] = Array.isArray(tbRaw)
+    ? tbRaw.map(Number).filter(n => !isNaN(n))
+    : typeof tbRaw === 'string'
+      ? tbRaw.split(',').map((s: string) => parseInt(s.trim())).filter((n: number) => !isNaN(n))
+      : [];
+
   if (hasWildcard) {
     // Parse exclusions from "*, !12, !32"
     const exclude = parseExclusions(channelsStr);
     return {
       name: n.name || config.host, config, cameras: [],
-      id_prefix: prefix, discover: true, exclude,
+      id_prefix: prefix, discover: true, exclude, talkback_channels,
     };
   }
 
@@ -179,7 +187,7 @@ function parseNvrEntry(n: any): NvrEntry {
   const cameras = parseChannelsExpr(channelsStr, prefix);
   return {
     name: n.name || config.host, config, cameras,
-    id_prefix: prefix, discover: false, exclude: [],
+    id_prefix: prefix, discover: false, exclude: [], talkback_channels,
   };
 }
 
@@ -210,7 +218,7 @@ function parseLegacyNvr(yaml: any): NvrEntry {
   };
 
   const cameras = parseCamerasLegacy(yaml.cameras, 'D');
-  return { name: 'default', config, cameras, id_prefix: 'D', discover: cameras.length === 0, exclude: [] };
+  return { name: 'default', config, cameras, id_prefix: 'D', discover: cameras.length === 0, exclude: [], talkback_channels: [] };
 }
 
 /**

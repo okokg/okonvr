@@ -18,6 +18,7 @@ import { transcodeRoutes } from './routes/transcode';
 import { healthRoutes } from './routes/health';
 import { statsRoutes } from './routes/stats';
 import { snapshotRoutes } from './routes/snapshots';
+import { talkbackRoutes } from './routes/talkback';
 import { playbackThumbnailRoutes } from './routes/playback-thumbnail';
 
 /** Run auto-discovery for a single NVR. Pure function — caller manages activities. */
@@ -141,6 +142,7 @@ async function main() {
   await fastify.register(statsRoutes);
   await fastify.register(snapshotRoutes);
   await fastify.register(playbackThumbnailRoutes);
+  await fastify.register(talkbackRoutes);
 
   await fastify.listen({ port: config.server.port, host: '0.0.0.0' });
   console.log(`Backend listening on port ${config.server.port}`);
@@ -176,6 +178,16 @@ async function main() {
 
   // Background: probe codecs for all cameras (detects audio)
   setTimeout(() => probeAllCodecs(), 10000);
+
+  // Background: detect talkback capability
+  setTimeout(async () => {
+    console.log('[talkback] Timer fired, calling detectAllTalkback...');
+    try {
+      await registry.detectAllTalkback();
+    } catch (e: any) {
+      console.error('[talkback] FATAL:', e.message, e.stack);
+    }
+  }, 5000);
 
   // Re-probe all codecs every 6 hours (picks up NVR config changes)
   setInterval(() => probeAllCodecs(true), 6 * 60 * 60 * 1000);

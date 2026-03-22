@@ -12,6 +12,30 @@ import { CamPlayer } from './player.js';
 
 (window._oko = window._oko || {}).cameraView = 'v6a0';
 
+/** Zero-pad number to 2 digits. */
+const _pad = (n) => String(n).padStart(2, '0');
+
+/** Format Date as HH:MM:SS. */
+const _hms = (d) => `${_pad(d.getHours())}:${_pad(d.getMinutes())}:${_pad(d.getSeconds())}`;
+
+/** Format Date as HH:MM. */
+const _hm = (d) => `${_pad(d.getHours())}:${_pad(d.getMinutes())}`;
+
+/** Format Date as DD.MM. */
+const _dm = (d) => `${_pad(d.getDate())}.${_pad(d.getMonth() + 1)}`;
+
+/** Format Date as DD.MM.YYYY. */
+const _dmy = (d) => `${_dm(d)}.${d.getFullYear()}`;
+
+/** Format Date as YYYY-MM-DDTHH:MM (for datetime-local input). */
+const _fmtInput = (d) => `${d.getFullYear()}-${_pad(d.getMonth()+1)}-${_pad(d.getDate())}T${_hm(d)}`;
+
+/** Format Date as YYYY-MM-DDTHH:MM:SS (for playback API). */
+const _fmtFull = (d) => `${_fmtInput(d)}:${_pad(d.getSeconds())}`;
+
+/** Seconds since midnight for a Date. */
+const _daySeconds = (d) => d.getHours() * 3600 + d.getMinutes() * 60 + d.getSeconds();
+
 export class CameraView {
   /**
    * @param {object} config - { id, label, group, sort_order, has_audio }
@@ -22,6 +46,7 @@ export class CameraView {
     this.group = config.group || '';
     this.codec = config.codec || null;
     this.hasAudio = !!config.has_audio;
+    this.hasTalkback = !!config.has_talkback;
     this.timeline = [];
 
     this.el = this._createElement();
@@ -31,17 +56,107 @@ export class CameraView {
     /** The CamPlayer currently owning video.src. Only _switchPlayer changes this. */
     this._activePlayer = null;
 
-    // cache DOM refs
-    this._statusDot = this.el.querySelector('.cam-status');
-    this._loading = this.el.querySelector('.cam-loading');
-    this._loadingText = this.el.querySelector('.cam-loading-text');
-    this._audioIcon = this.el.querySelector('.cam-audio-wrap');
-    this._modeBadge = this.el.querySelector('.cam-mode');
-    this._bitrateEl = this.el.querySelector('.cam-bitrate');
-    this._timelineCanvas = this.el.querySelector('.cam-timeline canvas');
-    this._qualityToggle = this.el.querySelector('.cam-quality-toggle');
-    this._infoTooltip = this.el.querySelector('.cam-info-tooltip');
-    this._snapshot = this.el.querySelector('.cam-snapshot');
+    // Cache all DOM refs once — no querySelector in methods
+    const el = this.el;
+    this._dom = {
+      audioIcon: el.querySelector('.cam-audio-wrap'),
+      micStatus: el.querySelector('.cam-mic-status'),
+      bitrateEl: el.querySelector('.cam-bitrate'),
+      freeze: el.querySelector('.cam-freeze'),
+      fsSeekExtra: el.querySelector('.fs-seek-extra'),
+      fsSeekMore: el.querySelector('.fs-seek-more'),
+      ghudAudio: el.querySelector('.ghud-audio-wrap'),
+      ghudMic: el.querySelector('.ghud-mic-wrap'),
+      ghudBar: el.querySelector('.ghud-bar'),
+      ghudCursor: el.querySelector('.ghud-cursor'),
+      ghudDate: el.querySelector('.ghud-date'),
+      ghudDayNext: el.querySelector('.ghud-day-next'),
+      ghudDayPrev: el.querySelector('.ghud-day-prev'),
+      ghudFill: el.querySelector('.ghud-fill'),
+      ghudLiveBtn: el.querySelector('.ghud-live-btn'),
+      ghudNow: el.querySelector('.ghud-now'),
+      ghudQHd: el.querySelector('.ghud-q-hd'),
+      ghudQRes: el.querySelector('.ghud-q-res'),
+      ghudQSd: el.querySelector('.ghud-q-sd'),
+      ghudQuality: el.querySelector('.ghud-quality'),
+      ghudRecLabel: el.querySelector('.ghud-rec-label'),
+      ghudTime: el.querySelector('.ghud-time'),
+      ghudTooltip: el.querySelector('.ghud-tooltip'),
+      ghudUnavailable: el.querySelector('.ghud-unavailable'),
+      infoInline: el.querySelector('.cam-info-inline'),
+      infoTooltip: el.querySelector('.cam-info-tooltip'),
+      loading: el.querySelector('.cam-loading'),
+      loadingDots: el.querySelector('.cam-loading-dots'),
+      loadingText: el.querySelector('.cam-loading-text'),
+      minimap: el.querySelector('.cam-minimap'),
+      minimapCanvas: el.querySelector('.cam-minimap-canvas'),
+      minimapViewport: el.querySelector('.cam-minimap-viewport'),
+      modeBadge: el.querySelector('.cam-mode'),
+      pauseIndicator: el.querySelector('.cam-pause-indicator'),
+      pbEnd: el.querySelector('.playback-end'),
+      pbGo: el.querySelector('.playback-go'),
+      pbLive: el.querySelector('.playback-live'),
+      pbResolution: el.querySelector('.playback-resolution'),
+      pbStart: el.querySelector('.playback-start'),
+      ptt: el.querySelector('.cam-ptt'),
+      pttCircle: el.querySelector('.cam-ptt-circle'),
+      pttTimer: el.querySelector('.cam-ptt-timer'),
+      playbackBtn: el.querySelector('.cam-playback-btn'),
+      playbackPanel: el.querySelector('.cam-playback-panel'),
+      qualityHd: el.querySelector('.quality-hd'),
+      qualityRes: el.querySelector('.quality-res'),
+      qualitySd: el.querySelector('.quality-sd'),
+      qualityToggle: el.querySelector('.cam-quality-toggle'),
+      quickMenu: el.querySelector('.cam-quick-menu'),
+      seekBar: el.querySelector('.seek-bar'),
+      seekCursor: el.querySelector('.seek-cursor'),
+      seekCursorDetail: el.querySelector('.seek-cursor-detail'),
+      seekCursorLine: el.querySelector('.seek-cursor-line'),
+      seekCursorTime: el.querySelector('.seek-cursor-time'),
+      seekDateLabel: el.querySelector('.seek-date-label'),
+      seekDayNext: el.querySelector('.seek-day-next'),
+      seekDayPrev: el.querySelector('.seek-day-prev'),
+      seekFill: el.querySelector('.seek-fill'),
+      seekInfoDate: el.querySelector('.seek-info-date-full'),
+      seekInfoName: el.querySelector('.seek-info-name'),
+      seekInfoRecDot: el.querySelector('.seek-info-rec-dot'),
+      seekInfoRecText: el.querySelector('.seek-info-rec-text'),
+      seekInfoTime: el.querySelector('.seek-info-time'),
+      seekInfoTimeBtn: el.querySelector('.seek-info-time-btn'),
+      seekLivePill: el.querySelector('.seek-live-pill'),
+      seekNow: el.querySelector('.seek-now'),
+      seekNowLabel: el.querySelector('.seek-now-label'),
+      seekRingFill: el.querySelector('.seek-ring-fill'),
+      seekThumbDot: el.querySelector('.seek-thumb-dot'),
+      seekThumbImg: el.querySelector('.seek-thumbnail img'),
+      seekThumbMarker: el.querySelector('.seek-thumb-marker'),
+      seekThumbProgress: el.querySelector('.seek-thumb-progress'),
+      seekThumbSpinner: el.querySelector('.seek-thumb-spinner'),
+      seekThumbTime: el.querySelector('.seek-thumb-time'),
+      seekThumbnail: el.querySelector('.seek-thumbnail'),
+      seekTimeline: el.querySelector('.cam-seek-timeline'),
+      seekTooltip: el.querySelector('.seek-time-tooltip'),
+      seekUnavailable: el.querySelector('.seek-unavailable'),
+      selectBadge: el.querySelector('.cam-select'),
+      snapshot: el.querySelector('.cam-snapshot'),
+      statusDot: el.querySelector('.cam-status'),
+      timelineCanvas: el.querySelector('.cam-timeline canvas'),
+      zoomBadge: el.querySelector('.cam-zoom-badge'),
+    };
+
+    // Aliases for backward compat (used in app.js / grid.js)
+    this._audioIcon = this._dom.audioIcon;
+    this._ghudAudio = this._dom.ghudAudio;
+    this._qualityToggle = this._dom.qualityToggle;
+    this._ghudQuality = this._dom.ghudQuality;
+    this._statusDot = this._dom.statusDot;
+    this._loading = this._dom.loading;
+    this._loadingText = this._dom.loadingText;
+    this._modeBadge = this._dom.modeBadge;
+    this._bitrateEl = this._dom.bitrateEl;
+    this._timelineCanvas = this._dom.timelineCanvas;
+    this._infoTooltip = this._dom.infoTooltip;
+    this._snapshot = this._dom.snapshot;
 
     // Snapshot preload logging
     if (this._snapshot) {
@@ -59,20 +174,326 @@ export class CameraView {
     // HD state
     this._hdPlayer = null;
     this._hdStream = null;
-    this._pendingQuality = null;
+
+    // ── UI State — single source of truth for HUD rendering ──
+    this._state = {
+      quality: {
+        current: 'sd',     // 'sd' | 'hd'
+        loading: null,     // null | 'sd' | 'hd' (fill-wipe target)
+        pending: null,     // null | 'sd' | 'hd' (finalized in _hideLoading)
+        playbackRes: null, // null | 'original' | '1080p' | '720p' etc
+      },
+      audio: {
+        available: !!config.has_audio,
+        unmuted: false,    // user intent
+      },
+      talkback: {
+        available: !!config.has_talkback,
+        connecting: false, // backend + mic + WebRTC in progress
+        active: false,     // PTT held down
+        locked: false,     // toggle mode (always-on)
+      },
+    };
+
+    // Talkback WebRTC connection (separate from video player)
+    this._talkbackPc = null;
+    this._talkbackStream = null;  // go2rtc stream name (__tb_xxx)
+    this._talkbackStartTime = null;
+    this._talkbackTimerInterval = null;
 
     // Digital zoom state
     this._zoom = { scale: 1, tx: 0, ty: 0 };
     this._zoomDragging = false;
 
-    // Set audio availability from backend
-    if (this.hasAudio) {
-      this._audioIcon.classList.add('has-audio');
-    }
+    // Initial render of state → DOM
+    this._renderAudio();
+    this._renderTalkback();
 
-    this._bindPlayerEvents();
+    this._wirePlayer(this.player, 'sd');
     this._bindDOMEvents();
     this._bindZoomEvents();
+  }
+
+  // ── State → DOM render methods ──
+
+  /** Render quality state to all HUD elements (fullscreen + grid). */
+  _renderQuality() {
+    const { current, loading, pending, playbackRes } = this._state.quality;
+    const inPlayback = this.isPlayback;
+
+    // ── Fullscreen HUD: .quality-sd / .quality-hd / .quality-res ──
+    if (this._dom.qualitySd) {
+      this._dom.qualitySd.classList.toggle('active', !inPlayback && current === 'sd' && !loading);
+      this._dom.qualitySd.classList.toggle('loading', loading === 'sd');
+    }
+    if (this._dom.qualityHd) {
+      this._dom.qualityHd.classList.toggle('active', !inPlayback && current === 'hd');
+      this._dom.qualityHd.classList.toggle('loading', loading === 'hd');
+    }
+    this._qualityToggle.classList.toggle('hd-active', current === 'hd' && !inPlayback);
+
+    // ── Grid HUD: .ghud-q-sd / .ghud-q-hd / .ghud-q-res ──
+    if (this._dom.ghudQSd) {
+      this._dom.ghudQSd.style.display = inPlayback ? 'none' : '';
+      this._dom.ghudQSd.classList.toggle('active', !inPlayback && current === 'sd' && !loading);
+      this._dom.ghudQSd.classList.toggle('loading', loading === 'sd');
+    }
+    if (this._dom.ghudQHd) {
+      this._dom.ghudQHd.style.display = inPlayback ? 'none' : '';
+      this._dom.ghudQHd.classList.toggle('active', !inPlayback && current === 'hd');
+      this._dom.ghudQHd.classList.toggle('loading', loading === 'hd');
+    }
+    if (this._dom.ghudQRes) {
+      if (inPlayback) {
+        const res = playbackRes || 'original';
+        this._dom.ghudQRes.textContent = res === 'original' ? 'SRC' : res;
+        this._dom.ghudQRes.style.display = 'inline-block';
+      } else {
+        this._dom.ghudQRes.style.display = 'none';
+      }
+    }
+  }
+
+  /** Render audio state to all HUD elements (fullscreen + grid). */
+  _renderAudio() {
+    const { available, unmuted } = this._state.audio;
+    this._audioIcon.classList.toggle('has-audio', available);
+    this._audioIcon.classList.toggle('unmuted', unmuted);
+    this._ghudAudio?.classList.toggle('has-audio', available);
+    this._ghudAudio?.classList.toggle('unmuted', unmuted);
+  }
+
+  /** Update audio state and re-render. */
+  _setAudioUnmuted(on) {
+    this._state.audio.unmuted = on;
+    this._renderAudio();
+  }
+
+  /** Get audio intent. */
+  get audioUnmuted() { return this._state.audio.unmuted; }
+
+  // ── Talkback (push-to-talk) ──
+
+  /** Render PTT button visibility based on talkback state. */
+  _renderTalkback() {
+    const { available, connecting, active, locked } = this._state.talkback;
+    const isOn = active || locked;
+
+    // Large PTT overlay button
+    const ptt = this._dom.ptt;
+    if (ptt) {
+      ptt.classList.toggle('has-talkback', available);
+      ptt.classList.toggle('connecting', connecting);
+      ptt.classList.toggle('active', active && !locked);
+      ptt.classList.toggle('locked', locked);
+    }
+
+    // Red border on cam cell
+    this.el.classList.toggle('ptt-active', isOn);
+
+    // Top-right mic status indicator (visible in both grid + fullscreen)
+    const micStatus = this._dom.micStatus;
+    if (micStatus) {
+      micStatus.classList.toggle('has-talkback', available);
+      micStatus.classList.toggle('connecting', connecting);
+      micStatus.classList.toggle('active', isOn);
+    }
+
+    // Grid HUD mic indicator
+    const ghudMic = this._dom.ghudMic;
+    if (ghudMic) {
+      ghudMic.classList.toggle('has-talkback', available);
+      ghudMic.classList.toggle('connecting', connecting);
+      ghudMic.classList.toggle('active', isOn);
+    }
+  }
+
+  /** Start PTT timer display. */
+  _startPttTimer() {
+    this._talkbackStartTime = Date.now();
+    const timer = this._dom.pttTimer;
+    if (!timer) return;
+    timer.textContent = '0:00';
+    this._talkbackTimerInterval = setInterval(() => {
+      const sec = Math.floor((Date.now() - this._talkbackStartTime) / 1000);
+      const m = Math.floor(sec / 60);
+      const s = sec % 60;
+      timer.textContent = `${m}:${String(s).padStart(2, '0')}`;
+    }, 500);
+  }
+
+  /** Stop PTT timer. */
+  _stopPttTimer() {
+    clearInterval(this._talkbackTimerInterval);
+    this._talkbackTimerInterval = null;
+    this._talkbackStartTime = null;
+  }
+
+  /**
+   * Start push-to-talk: get mic, create WebRTC to go2rtc backchannel stream.
+   * Called on mousedown/touchstart of PTT button, or toggle via hotkey/dblclick.
+   * @param {boolean} lock - if true, stay on until explicitly stopped (toggle mode)
+   */
+  async startTalkback(lock = false) {
+    if (this._state.talkback.active || this._state.talkback.connecting || !this._state.talkback.available) return;
+
+    // Show connecting spinner immediately
+    this._state.talkback.connecting = true;
+    this._renderTalkback();
+
+    // 1. Request stream from backend
+    if (!this.onTalkbackStart) { this._resetTalkbackState(); return; }
+    let streamName;
+    try {
+      streamName = await this.onTalkbackStart(this);
+    } catch (e) {
+      console.error(`[talkback] ${this.id}: backend start failed:`, e.message);
+      this._resetTalkbackState();
+      return;
+    }
+    if (!streamName) { this._resetTalkbackState(); return; }
+    this._talkbackStream = streamName;
+
+    // 2. Get microphone
+    let micStream;
+    try {
+      micStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+    } catch (e) {
+      console.error(`[talkback] ${this.id}: mic access denied:`, e.message);
+      if (this.onTalkbackStop) this.onTalkbackStop(this);
+      this._talkbackStream = null;
+      this._resetTalkbackState();
+      return;
+    }
+
+    // 3. Create WebRTC peer connection to go2rtc
+    try {
+      const pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
+      this._talkbackPc = pc;
+
+      for (const track of micStream.getAudioTracks()) {
+        pc.addTrack(track, micStream);
+      }
+      pc.addTransceiver('video', { direction: 'recvonly' });
+
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+
+      if (pc.iceGatheringState !== 'complete') {
+        await new Promise((resolve) => {
+          const check = () => { if (pc.iceGatheringState === 'complete') resolve(); };
+          pc.onicegatheringstatechange = check;
+          setTimeout(resolve, 3000);
+        });
+      }
+
+      const go2rtcApi = window.__okoConfig?.go2rtc_api || '/api';
+      const res = await fetch(`${go2rtcApi}/webrtc?src=${encodeURIComponent(streamName)}`, {
+        method: 'POST',
+        body: pc.localDescription.sdp,
+      });
+      if (!res.ok) throw new Error(`go2rtc ${res.status}`);
+      const sdp = await res.text();
+      await pc.setRemoteDescription({ type: 'answer', sdp });
+
+      // Connected
+      this._state.talkback.connecting = false;
+      this._state.talkback.active = true;
+      this._state.talkback.locked = lock;
+      this._renderTalkback();
+      this._startPttTimer();
+
+      // Auto-enable camera audio so user hears the other side
+      if (this._state.audio.available && !this._state.audio.unmuted) {
+        this.video.muted = false;
+        this._setAudioUnmuted(true);
+      }
+
+      console.log(`[talkback] ${this.id}: active${lock ? ' (locked)' : ''} → ${streamName}`);
+
+    } catch (e) {
+      console.error(`[talkback] ${this.id}: WebRTC failed:`, e.message);
+      this._cleanupTalkback();
+    }
+  }
+
+  /** Reset connecting state without full cleanup. */
+  _resetTalkbackState() {
+    this._state.talkback.connecting = false;
+    this._renderTalkback();
+  }
+
+  /** Toggle talkback on/off (lock mode). */
+  toggleTalkback() {
+    if (this._state.talkback.active || this._state.talkback.locked) {
+      this.stopTalkback(true);
+    } else {
+      this.startTalkback(true);
+    }
+  }
+
+  /** Stop push-to-talk: close WebRTC, stop mic, cleanup backend stream.
+   *  @param {boolean} force - stop even if locked (used by toggle and disable) */
+  stopTalkback(force = false) {
+    // In locked mode, only stop if forced (toggle/disable/hotkey)
+    if (this._state.talkback.locked && !force) return;
+    if (!this._state.talkback.active && !this._state.talkback.connecting && !this._talkbackPc) return;
+    console.log(`[talkback] ${this.id}: stopping`);
+    this._cleanupTalkback();
+    if (this.onTalkbackStop) this.onTalkbackStop(this);
+  }
+
+  /** Internal cleanup — close PC, stop mic tracks, reset all state. */
+  _cleanupTalkback() {
+    this._stopPttTimer();
+    if (this._talkbackPc) {
+      for (const sender of this._talkbackPc.getSenders()) {
+        sender.track?.stop();
+      }
+      this._talkbackPc.close();
+      this._talkbackPc = null;
+    }
+    this._talkbackStream = null;
+    this._state.talkback.connecting = false;
+    this._state.talkback.active = false;
+    this._state.talkback.locked = false;
+    this._renderTalkback();
+  }
+
+  /** Set quality loading state (called on click, before API). */
+  _setQualityLoading(target) {
+    this._state.quality.loading = target; // 'sd' | 'hd'
+    this._renderQuality();
+  }
+
+  /** Finalize quality after stream connects (called from _hideLoading). */
+  _finalizeQuality() {
+    const { pending } = this._state.quality;
+    if (pending) {
+      this._state.quality.current = pending;
+      this._state.quality.pending = null;
+    }
+    this._state.quality.loading = null;
+
+    // Defensive: sync state with actual active player.
+    // Catches any race condition where pending was lost/consumed prematurely.
+    if (!this.isPlayback) {
+      const actualHd = this._activePlayer === this._hdPlayer;
+      if (actualHd && this._state.quality.current !== 'hd') {
+        this._state.quality.current = 'hd';
+      } else if (!actualHd && this._state.quality.current !== 'sd') {
+        this._state.quality.current = 'sd';
+      }
+    }
+
+    this._renderQuality();
+  }
+
+  /** Cancel loading animation on error — revert to current quality. */
+  cancelQualityLoading() {
+    this._state.quality.loading = null;
+    this._state.quality.pending = null;
+    this._renderQuality();
   }
 
   // ── Public ──
@@ -88,12 +509,15 @@ export class CameraView {
       return;
     }
     this._switchPlayer(this.player);
-    if (!this.isPlayback) this._startGhudLive();
+    if (!this.isPlayback) this._startLiveTimer();
   }
 
   /** Stop ALL streaming (SD + HD + playback) and mark disabled. */
   disable() {
     clearInterval(this._nowMarkerTimer);
+    this._stopLiveTimer();
+    this.stopPlaybackTimer();
+    this._cleanupTalkback();
     if (this._hdPlayer) {
       this._hdPlayer.disable();
       this._hdPlayer = null;
@@ -201,7 +625,7 @@ export class CameraView {
         v.pause();
         this.stopPlaybackTimer();
         const position = this.playbackPosition;
-        const hasFreezeFrame = this.el.querySelector('.cam-freeze')?.classList.contains('visible');
+        const hasFreezeFrame = this._dom.freeze?.classList.contains('visible');
         if (hasFreezeFrame) {
           this._pausedPosition = position;
           if (this.onPlaybackPause) this.onPlaybackPause(this);
@@ -219,7 +643,7 @@ export class CameraView {
   /** Capture current video frame to overlay img (reliable across all browsers). */
   _captureFrame() {
     const v = this.video;
-    const img = this.el.querySelector('.cam-freeze');
+    const img = this._dom.freeze;
     if (!v || !v.videoWidth || !img) return false;
     try {
       const c = document.createElement('canvas');
@@ -271,7 +695,7 @@ export class CameraView {
 
   /** Hide freeze-frame overlay. */
   _clearFreezeFrame() {
-    const img = this.el.querySelector('.cam-freeze');
+    const img = this._dom.freeze;
     if (img) {
       img.classList.remove('visible');
       img.src = '';
@@ -282,7 +706,7 @@ export class CameraView {
   _pausedPosition = null;
 
   _showPauseIndicator(state) {
-    const ind = this.el.querySelector('.cam-pause-indicator');
+    const ind = this._dom.pauseIndicator;
     if (!ind) return;
     // Update icon
     ind.innerHTML = state === 'pause'
@@ -307,25 +731,23 @@ export class CameraView {
     if (p) this._updateInfoTooltip(p, p.bitrate || 0);
 
     // Populate fullscreen HUD info row
-    const fsName = this.el.querySelector('.seek-info-name');
+    const fsName = this._dom.seekInfoName;
     if (fsName) fsName.textContent = this.id;
 
     if (!this.isPlayback) {
       // LIVE mode: green accent, update time
       this.el.classList.add('fs-live');
       this._seekCursorFraction = undefined;
-      const recDot = this.el.querySelector('.seek-info-rec-dot');
-      const recText = this.el.querySelector('.seek-info-rec-text');
+      const recText = this._dom.seekInfoRecText;
       if (recText) recText.textContent = 'LIVE';
-      this._updateFsLiveTime();
-      this._fsLiveTimer = setInterval(() => this._updateFsLiveTime(), 1000);
+      this._updateLiveTime(); // immediate update — timer already running from grid
     } else {
       this.el.classList.remove('fs-live');
     }
 
     // Restore playback panel if it was open before
     if (this._panelWasOpen) {
-      const panel = this.el.querySelector('.cam-playback-panel');
+      const panel = this._dom.playbackPanel;
       if (panel) panel.classList.add('open');
       this._panelWasOpen = false;
     }
@@ -342,84 +764,75 @@ export class CameraView {
     }
   }
 
-  /** Update LIVE time in fullscreen HUD + seek bar position. */
-  _updateFsLiveTime() {
+  /**
+   * Update LIVE time for both grid and fullscreen HUD.
+   * Single timer drives both — no duplicate new Date()/daySeconds.
+   */
+  _updateLiveTime() {
     const now = new Date();
-    const pad = (n) => String(n).padStart(2, '0');
-    const fsTime = this.el.querySelector('.seek-info-time');
-    const fsDate = this.el.querySelector('.seek-info-date-full');
-    if (fsTime) fsTime.textContent = `${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
-    if (fsDate) fsDate.textContent = `${pad(now.getDate())}.${pad(now.getMonth()+1)}.${now.getFullYear()}`;
+    const pct = `${_daySeconds(now) / 86400 * 100}%`;
+    const timeStr = _hms(now);
 
-    // Update seek bar to show day progress
-    const seconds = now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds();
-    const fraction = seconds / 86400;
-    const fill = this.el.querySelector('.seek-fill');
-    const cursor = this.el.querySelector('.seek-cursor');
-    if (fill) fill.style.width = `${fraction * 100}%`;
-    if (cursor) cursor.style.left = `${fraction * 100}%`;
+    // Grid HUD (always active in LIVE mode)
+    if (this._dom.ghudFill) this._dom.ghudFill.style.width = pct;
+    if (this._dom.ghudCursor) this._dom.ghudCursor.style.left = pct;
+    if (this._dom.ghudTime) this._dom.ghudTime.textContent = timeStr;
+
+    // Fullscreen HUD (only when in fullscreen)
+    if (this._dom.seekInfoTime) this._dom.seekInfoTime.textContent = timeStr;
+    if (this._dom.seekInfoDate) this._dom.seekInfoDate.textContent = _dmy(now);
+    if (this._dom.seekFill) this._dom.seekFill.style.width = pct;
+    if (this._dom.seekCursor) this._dom.seekCursor.style.left = pct;
   }
 
-  /** Start LIVE grid HUD — update bar + time every second. */
-  _startGhudLive() {
-    this._stopGhudLive();
-    // Set initial labels
-    const recLabel = this.el.querySelector('.ghud-rec-label');
+  /** Start LIVE timer — drives both grid and fullscreen HUD. */
+  _startLiveTimer() {
+    this._stopLiveTimer();
+    const recLabel = this._dom.ghudRecLabel;
     if (recLabel) recLabel.textContent = 'LIVE';
-    this._updateGhudLive();
-    this._ghudLiveTimer = setInterval(() => this._updateGhudLive(), 1000);
+    this._updateLiveTime();
+    this._liveTimer = setInterval(() => this._updateLiveTime(), 1000);
   }
 
-  /** Stop LIVE grid HUD timer. */
-  _stopGhudLive() {
-    clearInterval(this._ghudLiveTimer);
-    this._ghudLiveTimer = null;
-  }
-
-  /** Update LIVE grid HUD bar position + time. */
-  _updateGhudLive() {
-    const now = new Date();
-    const pad = (n) => String(n).padStart(2, '0');
-    const seconds = now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds();
-    const fraction = seconds / 86400;
-    const fill = this.el.querySelector('.ghud-fill');
-    const cursor = this.el.querySelector('.ghud-cursor');
-    const time = this.el.querySelector('.ghud-time');
-    if (fill) fill.style.width = `${fraction * 100}%`;
-    if (cursor) cursor.style.left = `${fraction * 100}%`;
-    if (time) time.textContent = `${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
+  /** Stop LIVE timer. */
+  _stopLiveTimer() {
+    clearInterval(this._liveTimer);
+    this._liveTimer = null;
   }
 
   /** Exit in-page fullscreen mode. */
   exitFullscreen({ keepZoom = false } = {}) {
     this.el.classList.remove('fullscreen');
     this.el.classList.remove('fs-live');
-    clearInterval(this._fsLiveTimer);
+    // Note: _liveTimer keeps running — grid HUD still needs updates
     // Save and close playback panel
-    const panel = this.el.querySelector('.cam-playback-panel');
+    const panel = this._dom.playbackPanel;
     this._panelWasOpen = panel && panel.classList.contains('open');
     if (panel) panel.classList.remove('open');
-    const pbBtn = this.el.querySelector('.cam-playback-btn');
+    const pbBtn = this._dom.playbackBtn;
     if (pbBtn) pbBtn.classList.remove('active');
 
     // Pause: always preserve state. Resume only via explicit togglePause.
     // Just hide the indicator (enterFullscreen will restore it).
-    const ind = this.el.querySelector('.cam-pause-indicator');
+    const ind = this._dom.pauseIndicator;
     if (ind) ind.classList.remove('visible');
 
-    this.video.muted = true;
-    this._audioIcon.classList.remove('unmuted');
+    // Mute audio on exit — unless talkback is active (need to hear the other side)
+    if (!this._state.talkback.active && !this._state.talkback.locked) {
+      this.video.muted = true;
+      this._setAudioUnmuted(false);
+    }
     this._infoTooltip.classList.remove('visible');
     if (keepZoom) {
       // Hide zoom visuals but preserve _zoom state for later
       this.video.style.transform = '';
       this.video.style.transformOrigin = '';
-      const freeze = this.el.querySelector('.cam-freeze');
+      const freeze = this._dom.freeze;
       if (freeze) { freeze.style.transform = ''; freeze.style.transformOrigin = ''; }
       this.el.classList.remove('cam-zoomed');
       clearInterval(this._minimapTimer);
       this._minimapTimer = null;
-      const mm = this.el.querySelector('.cam-minimap');
+      const mm = this._dom.minimap;
       if (mm) mm.classList.remove('visible');
     } else {
       this._resetZoom();
@@ -447,29 +860,14 @@ export class CameraView {
     this._showLoading('switching to hd');
 
     this._hdPlayer = new CamPlayer(this.video, streamName, { preferH265: forceMSE });
-    this._hdPlayer.onStatusChange = (online) => {
-      this._statusDot.classList.toggle('live', online);
-    };
-    this._hdPlayer.onModeChange = (mode) => {
-      this._modeBadge.textContent = `${mode.toUpperCase()} ●LIVE HD`;
-      this._modeBadge.className = `cam-mode ${mode}`;
-    };
-    this._hdPlayer.onStage = (stage) => {
-      if (stage === 'playing') {
-        this._hideLoading();
-      } else {
-        this._showLoading(stage);
-      }
-    };
+    this._wirePlayer(this._hdPlayer, 'hd');
 
     const useMSE = forceMSE && !CamPlayer.h265WebRTCSupported;
     this._switchPlayer(this._hdPlayer, useMSE ? 'mse' : 'start');
 
-    // Don't set .active yet — loading animation still running.
-    // _hideLoading will finalize the toggle state.
-    this._qualityToggle.querySelector('.quality-sd').classList.remove('active');
-    this._pendingQuality = 'hd';
-    this._qualityToggle.classList.add('hd-active');
+    // State: pending HD, will finalize in _hideLoading
+    this._state.quality.pending = 'hd';
+    this._renderQuality();
   }
 
   /** Stop HD and return to SD (sub-stream). */
@@ -483,24 +881,48 @@ export class CameraView {
     this._showLoading('switching to sd');
     this._switchPlayer(this.player);
 
-    this._qualityToggle.querySelector('.quality-hd').classList.remove('active');
-    this._pendingQuality = 'sd';
-    this._qualityToggle.classList.remove('hd-active');
+    // State: pending SD, will finalize in _hideLoading
+    this._state.quality.pending = 'sd';
+    this._renderQuality();
   }
 
   /** Whether currently in HD mode. */
   get isHd() { return !!this._hdStream; }
 
+  /** @returns {string|null} HD stream name (for backend cleanup). */
+  get hdStreamName() { return this._hdStream; }
+
+  /** @returns {Date|null} Position where playback was paused. */
+  get pausedPosition() { return this._pausedPosition; }
+
+  /** @param {Date|null} val */
+  set pausedPosition(val) { this._pausedPosition = val; }
+
+  /**
+   * Destroy playback player and stream ref — video stays on freeze frame.
+   * Called from app.js when archive paused (stream destroyed to free NVR resources).
+   */
+  destroyPlaybackPlayer() {
+    if (this._playbackPlayer) {
+      this._playbackPlayer.disable();
+      this._playbackPlayer = null;
+    }
+    this._playbackStream = null;
+  }
+
+  /** Reset digital zoom to 1x. */
+  resetZoom() { this._resetZoom(); }
+
   /** Toggle playback panel open/closed. */
   togglePlaybackPanel() {
-    this.el.querySelector('.cam-playback-btn').click();
+    this._dom.playbackBtn.click();
   }
 
   /** Switch live stream to a different go2rtc stream (e.g. transcoded). */
   switchToStream(newStreamName) {
     this._transcodeStream = newStreamName;
     this.player = new CamPlayer(this.video, newStreamName);
-    this._bindPlayerEvents();
+    this._wirePlayer(this.player, 'sd');
     this._switchPlayer(this.player);
   }
 
@@ -519,7 +941,7 @@ export class CameraView {
     }
 
     // Set loading stage dots: 1=connecting, 2=negotiating/buffering, 3=decoding
-    const dots = this._loading.querySelector('.cam-loading-dots');
+    const dots = this._dom.loadingDots;
     if (dots) {
       const t = (text || '').toLowerCase();
       let stage = 1;
@@ -540,22 +962,14 @@ export class CameraView {
     this._loading.style.display = 'none';
     this._stopRenderCheck();
     this._clearFreezeFrame();
-    // Clear quality toggle loading state and finalize active
-    this._qualityToggle.querySelectorAll('.quality-opt.loading').forEach(el => el.classList.remove('loading'));
-    if (this._pendingQuality) {
-      const target = this._qualityToggle.querySelector(`.quality-${this._pendingQuality}`);
-      if (target) target.classList.add('active');
-      this._pendingQuality = null;
-    }
+    this._finalizeQuality();
     // Fade out snapshot overlay once real video is playing
     if (this._snapshot && !this._snapshot.classList.contains('loaded')) {
       this._snapshot.classList.add('loaded');
       console.log(`[snapshot] ${this.id}: fading out (video playing)`);
     }
-    // Restore audio if in fullscreen — WebRTC ontrack always sets muted=true for autoplay policy.
-    if (this.el.classList.contains('fullscreen') && !CameraView.globalMute && !this._awaitingUserPlay) {
-      this._tryUnmute();
-    }
+    // Restore audio to match HUD state after stream reconnect
+    this.restoreAudio();
   }
 
   /**
@@ -586,7 +1000,7 @@ export class CameraView {
       this._awaitingUserPlay = false;
       this.video.muted = false;
       this.video.play().catch(() => {});
-      this._audioIcon.classList.toggle('unmuted', this._audioIcon.classList.contains('has-audio'));
+      this._setAudioUnmuted(this._state.audio.available);
       this._showPauseIndicator('play');
     };
     this.el.addEventListener('click', handler, { once: true, capture: true });
@@ -594,7 +1008,7 @@ export class CameraView {
 
   /** Try to unmute; if autoplay policy blocks it, defer to first user click. */
   _tryUnmute() {
-    const hasAudio = this._audioIcon.classList.contains('has-audio');
+    const hasAudio = this._state.audio.available;
     if (!hasAudio) return;
 
     this.video.muted = false;
@@ -603,21 +1017,48 @@ export class CameraView {
       p.catch(() => {
         // Autoplay policy: no user interaction yet — stay muted, unmute on first click
         this.video.muted = true;
-        this._audioIcon.classList.remove('unmuted');
+        this._setAudioUnmuted(false);
         const unlock = () => {
           document.removeEventListener('click', unlock, { capture: true });
           document.removeEventListener('keydown', unlock, { capture: true });
           if (this.el.classList.contains('fullscreen') && !CameraView.globalMute) {
             this.video.muted = false;
             this.video.play().catch(() => {});
-            this._audioIcon.classList.add('unmuted');
+            this._setAudioUnmuted(true);
           }
         };
         document.addEventListener('click', unlock, { capture: true, once: true });
         document.addEventListener('keydown', unlock, { capture: true, once: true });
       });
     }
-    this._audioIcon.classList.toggle('unmuted', !this.video.muted);
+    this._setAudioUnmuted(!this.video.muted);
+  }
+
+  /**
+   * Restore audio to match HUD state after stream reconnect.
+   * Called from _hideLoading — new player always sets muted=true.
+   */
+  restoreAudio() {
+    if (CameraView.globalMute || this._awaitingUserPlay) return;
+    if (this._state.audio.unmuted) {
+      this.video.muted = false;
+      const p = this.video.play();
+      if (p && p.catch) {
+        p.catch(() => {
+          this.video.muted = true;
+          this._setAudioUnmuted(false);
+        });
+      }
+    } else if (this.el.classList.contains('fullscreen')) {
+      this._tryUnmute();
+    }
+  }
+
+  /** Re-cache quality DOM refs after innerHTML rebuild (playback mode transitions). */
+  _recacheQualityDom() {
+    this._dom.qualitySd = this._qualityToggle.querySelector('.quality-sd');
+    this._dom.qualityHd = this._qualityToggle.querySelector('.quality-hd');
+    this._dom.qualityRes = this._qualityToggle.querySelector('.quality-res');
   }
 
   /** Poll until video actually has frames, then hide loading. */
@@ -625,7 +1066,7 @@ export class CameraView {
     this._stopRenderCheck();
     this._renderCheckTimer = setInterval(() => {
       if (this.video.videoWidth > 0 && this.video.videoHeight > 0) {
-        const hasFreezeFrame = this.el.querySelector('.cam-freeze')?.classList.contains('visible');
+        const hasFreezeFrame = this._dom.freeze?.classList.contains('visible');
         if (hasFreezeFrame) {
           // Resuming from pause: videoWidth>0 means decoder has rendered a frame.
           // Short delay for paint, then reveal.
@@ -696,7 +1137,7 @@ export class CameraView {
       if (this.el.classList.contains('paused')) parts.push('PAUSED');
       const text = parts.join(' · ');
       this._infoTooltip.textContent = text;
-      const infoInline = this.el.querySelector('.cam-info-inline');
+      const infoInline = this._dom.infoInline;
       if (infoInline) infoInline.textContent = text;
     }
 
@@ -814,6 +1255,7 @@ export class CameraView {
    * @type {(camera: CameraView) => void}
    */
   onConnectionError = null;
+  onHdError = null;
 
   /**
    * Called when go2rtc lost stream definition (needs recovery).
@@ -838,6 +1280,18 @@ export class CameraView {
    * @type {(camera: CameraView, selected: boolean) => void}
    */
   onSelect = null;
+
+  /**
+   * Called when PTT button pressed. Should call api.startTalkback() and return stream name.
+   * @type {(camera: CameraView) => Promise<string>}
+   */
+  onTalkbackStart = null;
+
+  /**
+   * Called when PTT button released. Should call api.stopTalkback().
+   * @type {(camera: CameraView) => void}
+   */
+  onTalkbackStop = null;
 
   // ── Playback ──
 
@@ -874,7 +1328,6 @@ export class CameraView {
     }
 
     this._playbackStream = streamName;
-    this._playbackResolution = resolution;
 
     // track position
     this._playbackDate = new Date(startTime);
@@ -885,20 +1338,7 @@ export class CameraView {
 
     this._showLoading('loading archive');
     this._playbackPlayer = new CamPlayer(this.video, streamName, { preferH265: forceMSE });
-    this._playbackPlayer.onStatusChange = (online) => {
-      this._statusDot.classList.toggle('live', online);
-    };
-    this._playbackPlayer.onModeChange = (mode) => {
-      this._modeBadge.className = 'cam-mode playback';
-      this._updatePlaybackBadge(mode);
-    };
-    this._playbackPlayer.onStage = (stage) => {
-      if (stage === 'playing') {
-        this._hideLoading();
-      } else {
-        this._showLoading(stage);
-      }
-    };
+    this._wirePlayer(this._playbackPlayer, 'playback');
 
     // HEVC streams: use MSE when browser lacks H.265 WebRTC support.
     // CamPlayer.globalForceMSE (config) is handled inside start() for all streams.
@@ -910,16 +1350,15 @@ export class CameraView {
     this.el.classList.add('playback-mode');
 
     // Stop LIVE grid timer, switch to archive labels
-    this._stopGhudLive();
-    const ghudRecLabel = this.el.querySelector('.ghud-rec-label');
+    this._stopLiveTimer();
+    const ghudRecLabel = this._dom.ghudRecLabel;
     if (ghudRecLabel) ghudRecLabel.textContent = 'REC';
 
     // Switch fullscreen HUD from LIVE to ARCHIVE mode
     this.el.classList.remove('fs-live');
-    clearInterval(this._fsLiveTimer);
-    const fsName = this.el.querySelector('.seek-info-name');
+    const fsName = this._dom.seekInfoName;
     if (fsName) fsName.textContent = this.id;
-    const fsRecText = this.el.querySelector('.seek-info-rec-text');
+    const fsRecText = this._dom.seekInfoRecText;
     if (fsRecText) fsRecText.textContent = 'REC';
 
     // Real-time now marker update (moves the "now" line on today's timeline)
@@ -928,11 +1367,14 @@ export class CameraView {
 
     // Show resolution instead of SD/HD toggle
     this._qualityToggle.dataset.mode = 'playback';
-    this._qualityToggle.innerHTML = `<span class="quality-res">${resolution === 'original' ? 'Original' : resolution}</span>`;
+    this._qualityToggle.innerHTML = `<span class="quality-res">${resolution === 'original' ? 'SRC' : resolution}</span>`;
+    this._recacheQualityDom();
+    this._state.quality.playbackRes = resolution;
+    this._renderQuality();
 
     // Update button states: Play=active(green "Stop"), Live=hint(pulsing "go live")
-    const goBtn = this.el.querySelector('.playback-go');
-    const liveBtn = this.el.querySelector('.playback-live');
+    const goBtn = this._dom.pbGo;
+    const liveBtn = this._dom.pbLive;
     goBtn.innerHTML = '&#9632; Stop';
     goBtn.classList.add('active');
     liveBtn.classList.remove('active');
@@ -940,19 +1382,18 @@ export class CameraView {
     liveBtn.innerHTML = '&#9654; Live';
 
     // restore resolution dropdown and datetime picker to current values
-    const select = this.el.querySelector('.playback-resolution');
+    const select = this._dom.pbResolution;
     if (select) select.value = resolution;
 
-    const pad = (n) => String(n).padStart(2, '0');
-    const fmt = (d) => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-    const startInput = this.el.querySelector('.playback-start');
-    const endInput = this.el.querySelector('.playback-end');
-    if (startInput) startInput.value = fmt(startTime);
-    if (endInput) endInput.value = fmt(endTime);
+    const startInput = this._dom.pbStart;
+    const endInput = this._dom.pbEnd;
+    if (startInput) startInput.value = _fmtInput(startTime);
+    if (endInput) endInput.value = _fmtInput(endTime);
 
     // show seek timeline and start updating position
-    this.el.querySelector('.cam-seek-timeline').classList.add('active');
+    this._dom.seekTimeline.classList.add('active');
     this._startPositionTimer();
+    this._renderQuality();
   }
 
   /** Switch back to live. */
@@ -963,7 +1404,7 @@ export class CameraView {
     this._clearFreezeFrame();
     this._pausedPosition = null;
     this.el.classList.remove('paused');
-    const ind = this.el.querySelector('.cam-pause-indicator');
+    const ind = this._dom.pauseIndicator;
     if (ind) ind.classList.remove('visible');
     if (this._playbackPlayer) {
       this._playbackPlayer.disable();
@@ -973,24 +1414,23 @@ export class CameraView {
     this._playbackDate = null;
     this._playbackStart = null;
     this.el.classList.remove('playback-mode');
-    this.el.querySelector('.cam-seek-timeline').classList.remove('active');
+    this._dom.seekTimeline.classList.remove('active');
 
     // Restore fullscreen HUD to LIVE mode if in fullscreen
     if (this.el.classList.contains('fullscreen')) {
       this.el.classList.add('fs-live');
-      const recText = this.el.querySelector('.seek-info-rec-text');
+      const recText = this._dom.seekInfoRecText;
       if (recText) recText.textContent = 'LIVE';
-      this._updateFsLiveTime();
-      this._fsLiveTimer = setInterval(() => this._updateFsLiveTime(), 1000);
     }
 
     // Restore SD/HD toggle
     this._qualityToggle.dataset.mode = '';
     this._qualityToggle.innerHTML = '<span class="quality-opt quality-sd active">SD</span><span class="quality-opt quality-hd">HD</span>';
+    this._recacheQualityDom();
 
     // Reset button states: Play=default, Live=active(green)
-    const goBtn = this.el.querySelector('.playback-go');
-    const liveBtn = this.el.querySelector('.playback-live');
+    const goBtn = this._dom.pbGo;
+    const liveBtn = this._dom.pbLive;
     goBtn.innerHTML = '&#9654; Play';
     goBtn.classList.remove('active');
     liveBtn.classList.remove('return-hint');
@@ -1001,13 +1441,17 @@ export class CameraView {
     this._switchPlayer(this.player);
 
     // Restart LIVE grid HUD timer
-    this._startGhudLive();
+    this._startLiveTimer();
 
-    // Reset quality toggle to SD
-    this._qualityToggle.querySelector('.quality-hd').classList.remove('active');
-    this._qualityToggle.querySelector('.quality-sd').classList.add('active');
-    this._qualityToggle.classList.remove('hd-active');
-  }  stopPlaybackTimer() {
+    // Reset quality state to SD
+    this._state.quality.current = 'sd';
+    this._state.quality.loading = null;
+    this._state.quality.pending = null;
+    this._state.quality.playbackRes = null;
+    this._renderQuality();
+  }
+
+  stopPlaybackTimer() {
     if (this._positionTimer) {
       clearInterval(this._positionTimer);
       this._positionTimer = null;
@@ -1024,7 +1468,7 @@ export class CameraView {
 
   get isPlayback() { return !!this._playbackStream; }
   get playbackStreamName() { return this._playbackStream; }
-  get playbackResolution() { return this._playbackResolution || 'original'; }
+  get playbackResolution() { return this._state.quality.playbackRes || 'original'; }
 
   _startPositionTimer() {
     this._positionTimer = setInterval(() => this._updateSeekPosition(), 500);
@@ -1036,14 +1480,14 @@ export class CameraView {
     if (!pos) return;
 
     const secondsInDay = 24 * 3600;
-    const currentSeconds = pos.getHours() * 3600 + pos.getMinutes() * 60 + pos.getSeconds();
+    const currentSeconds = _daySeconds(pos);
     const fraction = Math.min(currentSeconds / secondsInDay, 1);
     this._seekCursorFraction = fraction;
 
-    const fill = this.el.querySelector('.seek-fill');
-    const cursor = this.el.querySelector('.seek-cursor');
-    const cursorLine = this.el.querySelector('.seek-cursor-line');
-    const cursorTime = this.el.querySelector('.seek-cursor-time');
+    const fill = this._dom.seekFill;
+    const cursor = this._dom.seekCursor;
+    const cursorLine = this._dom.seekCursorLine;
+    const cursorTime = this._dom.seekCursorTime;
     fill.style.width = `${fraction * 100}%`;
     cursor.style.left = `${fraction * 100}%`;
     cursorLine.style.left = `${fraction * 100}%`;
@@ -1053,23 +1497,21 @@ export class CameraView {
     this._updateSeekAvailability();
 
     // Update cursor time label
-    const pad = (n) => String(n).padStart(2, '0');
-    const timeStr = `${pad(pos.getHours())}:${pad(pos.getMinutes())}:${pad(pos.getSeconds())}`;
+    const timeStr = _hms(pos);
     cursorTime.textContent = timeStr;
-    const dateStr = `${pad(pos.getDate())}.${pad(pos.getMonth() + 1)}`;
-    this._modeBadge.innerHTML = `<span class="rec-dot">● REC</span><span class="rec-time">${timeStr}</span><span class="rec-date">${dateStr}</span>`;
-    this._modeBadge.className = 'cam-mode playback';
+    const dateStr = _dm(pos);
+    this._renderPlaybackBadge(timeStr, dateStr);
 
     // Update fullscreen HUD info row
-    const fsTime = this.el.querySelector('.seek-info-time');
-    const fsDateFull = this.el.querySelector('.seek-info-date-full');
+    const fsTime = this._dom.seekInfoTime;
+    const fsDateFull = this._dom.seekInfoDate;
     if (fsTime) fsTime.textContent = timeStr;
-    if (fsDateFull) fsDateFull.textContent = `${pad(pos.getDate())}.${pad(pos.getMonth() + 1)}.${pos.getFullYear()}`;
+    if (fsDateFull) fsDateFull.textContent = _dmy(pos);
 
     // Update grid HUD
-    const ghudFill = this.el.querySelector('.ghud-fill');
-    const ghudCursor = this.el.querySelector('.ghud-cursor');
-    const ghudTime = this.el.querySelector('.ghud-time');
+    const ghudFill = this._dom.ghudFill;
+    const ghudCursor = this._dom.ghudCursor;
+    const ghudTime = this._dom.ghudTime;
     if (ghudFill) ghudFill.style.width = `${fraction * 100}%`;
     if (ghudCursor) ghudCursor.style.left = `${fraction * 100}%`;
     if (ghudTime) ghudTime.textContent = timeStr;
@@ -1077,7 +1519,6 @@ export class CameraView {
 
   /** Update the date label on the seek timeline. */
   _updateDateLabel() {
-    const pad = (n) => String(n).padStart(2, '0');
     const d = this._playbackDate;
     const now = new Date();
     const isToday = d && d.getFullYear() === now.getFullYear()
@@ -1086,41 +1527,41 @@ export class CameraView {
     const days = ['ВС', 'ПН', 'ВТ', 'СР', 'ЧТ', 'ПТ', 'СБ'];
 
     // Fullscreen seek-timeline date label
-    const label = this.el.querySelector('.seek-date-label');
+    const label = this._dom.seekDateLabel;
     if (label) {
       if (!d) { label.innerHTML = ''; }
       else {
         const weekday = days[d.getDay()];
-        label.innerHTML = `<span class="seek-date-weekday">${weekday}</span>${pad(d.getDate())}.${pad(d.getMonth() + 1)}`;
+        label.innerHTML = `<span class="seek-date-weekday">${weekday}</span>${_dm(d)}`;
         label.classList.toggle('is-today', isToday);
       }
     }
-    const nextBtn = this.el.querySelector('.seek-day-next');
+    const nextBtn = this._dom.seekDayNext;
     if (nextBtn) nextBtn.classList.toggle('disabled', isToday);
 
     // Grid HUD date label
-    const ghudDate = this.el.querySelector('.ghud-date');
+    const ghudDate = this._dom.ghudDate;
     if (ghudDate) {
       if (!d) { ghudDate.textContent = ''; }
       else {
         const weekday = days[d.getDay()];
-        ghudDate.textContent = `${weekday} ${pad(d.getDate())}.${pad(d.getMonth() + 1)}`;
+        ghudDate.textContent = `${weekday} ${_dm(d)}`;
         ghudDate.classList.toggle('is-today', isToday);
       }
     }
-    const ghudNext = this.el.querySelector('.ghud-day-next');
+    const ghudNext = this._dom.ghudDayNext;
     if (ghudNext) ghudNext.classList.toggle('disabled', isToday);
   }
 
   /** Show/hide unavailable zone and now marker based on playback date. */
   _updateSeekAvailability() {
     // Fullscreen seek-timeline elements
-    const unavailable = this.el.querySelector('.seek-unavailable');
-    const nowMarker = this.el.querySelector('.seek-now');
-    const nowLabel = this.el.querySelector('.seek-now-label');
+    const unavailable = this._dom.seekUnavailable;
+    const nowMarker = this._dom.seekNow;
+    const nowLabel = this._dom.seekNowLabel;
     // Grid HUD elements
-    const ghudUnavail = this.el.querySelector('.ghud-unavailable');
-    const ghudNow = this.el.querySelector('.ghud-now');
+    const ghudUnavail = this._dom.ghudUnavailable;
+    const ghudNow = this._dom.ghudNow;
 
     const hideAll = () => {
       if (unavailable) unavailable.style.display = 'none';
@@ -1141,10 +1582,10 @@ export class CameraView {
 
     const bufferMinutes = 1;
     const availableUntil = new Date(now.getTime() - bufferMinutes * 60 * 1000);
-    const availSeconds = availableUntil.getHours() * 3600 + availableUntil.getMinutes() * 60 + availableUntil.getSeconds();
+    const availSeconds = _daySeconds(availableUntil);
     const availFraction = Math.min(availSeconds / (24 * 3600), 1);
 
-    const nowSeconds = now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds();
+    const nowSeconds = _daySeconds(now);
     const nowFraction = Math.min(nowSeconds / (24 * 3600), 1);
 
     // Fullscreen seek-timeline
@@ -1162,8 +1603,7 @@ export class CameraView {
     if (nowLabel) {
       const cursorDist = Math.abs((this._seekCursorFraction || 0) - nowFraction);
       nowLabel.style.opacity = cursorDist < 0.04 ? '0' : '';
-      const pad = (n) => String(n).padStart(2, '0');
-      nowLabel.textContent = `${pad(now.getHours())}:${pad(now.getMinutes())}`;
+      nowLabel.textContent = _hm(now);
     }
 
     // Grid HUD
@@ -1194,13 +1634,9 @@ export class CameraView {
     return seekDate > availableUntil;
   }
 
-  /** Update badge during playback with mode info. */
-  _updatePlaybackBadge(mode) {
-    const pos = this.playbackPosition;
-    const pad = (n) => String(n).padStart(2, '0');
-    if (pos) {
-      const timeStr = `${pad(pos.getHours())}:${pad(pos.getMinutes())}`;
-      const dateStr = `${pad(pos.getDate())}.${pad(pos.getMonth() + 1)}`;
+  /** Render playback mode badge with optional time/date. */
+  _renderPlaybackBadge(timeStr, dateStr) {
+    if (timeStr && dateStr) {
       this._modeBadge.innerHTML = `<span class="rec-dot">● REC</span><span class="rec-time">${timeStr}</span><span class="rec-date">${dateStr}</span>`;
     } else {
       this._modeBadge.innerHTML = `<span class="rec-dot">● REC</span>`;
@@ -1208,12 +1644,18 @@ export class CameraView {
     this._modeBadge.className = 'cam-mode playback';
   }
 
+  /** Update badge during playback with mode info. */
+  _updatePlaybackBadge(mode) {
+    const pos = this.playbackPosition;
+    this._renderPlaybackBadge(pos ? _hm(pos) : null, pos ? _dm(pos) : null);
+  }
+
   /** When datetime/resolution changes during archive: revert Play button, highlight changed control + Play. */
   _markPendingChange(changedEl) {
     if (!this.isPlayback) return;
 
     // Revert Stop → Play
-    const goBtn = this.el.querySelector('.playback-go');
+    const goBtn = this._dom.pbGo;
     goBtn.innerHTML = '&#9654; Play';
     goBtn.classList.remove('active');
     goBtn.classList.add('pending');
@@ -1242,7 +1684,7 @@ export class CameraView {
     // Apply to both video and freeze frame
     this.video.style.transform = transform;
     this.video.style.transformOrigin = origin;
-    const freeze = this.el.querySelector('.cam-freeze');
+    const freeze = this._dom.freeze;
     if (freeze) {
       freeze.style.transform = transform;
       freeze.style.transformOrigin = origin;
@@ -1251,7 +1693,7 @@ export class CameraView {
     this.el.classList.toggle('cam-zoomed', scale > 1);
 
     // Zoom level badge in top bar
-    const badge = this.el.querySelector('.cam-zoom-badge');
+    const badge = this._dom.zoomBadge;
     if (badge) {
       badge.textContent = scale <= 1 ? '' : `${scale.toFixed(1)}×`;
       badge.classList.toggle('visible', scale > 1);
@@ -1268,7 +1710,7 @@ export class CameraView {
   }
 
   _updateMinimap() {
-    const minimap = this.el.querySelector('.cam-minimap');
+    const minimap = this._dom.minimap;
     if (!minimap) return;
 
     const { scale, tx, ty } = this._zoom;
@@ -1287,10 +1729,10 @@ export class CameraView {
     this._drawMinimapFrame();
 
     // Viewport rectangle
-    const vp = minimap.querySelector('.cam-minimap-viewport');
+    const vp = this._dom.minimapViewport;
     const rect = this.el.getBoundingClientRect();
     const w = rect.width, h = rect.height;
-    const canvas = minimap.querySelector('.cam-minimap-canvas');
+    const canvas = this._dom.minimapCanvas;
     const mw = canvas.width;
     const mh = canvas.height;
 
@@ -1306,7 +1748,7 @@ export class CameraView {
   }
 
   _drawMinimapFrame() {
-    const canvas = this.el.querySelector('.cam-minimap-canvas');
+    const canvas = this._dom.minimapCanvas;
     if (!canvas || !this.video.videoWidth) return;
     const ctx = canvas.getContext('2d');
     const mw = canvas.width = 120;
@@ -1321,7 +1763,7 @@ export class CameraView {
     clearInterval(this._minimapTimer);
     this._minimapTimer = null;
     // Reset minimap position to default (top-right)
-    const mm = this.el.querySelector('.cam-minimap');
+    const mm = this._dom.minimap;
     if (mm) { mm.style.left = ''; mm.style.right = ''; mm.style.top = ''; }
     this._applyZoom();
   }
@@ -1467,7 +1909,7 @@ export class CameraView {
     });
 
     // Minimap: drag to reposition widget, click to pan viewport
-    const minimap = this.el.querySelector('.cam-minimap');
+    const minimap = this._dom.minimap;
     if (minimap) {
       let mmDragging = false;
       let mmMoved = false;
@@ -1515,7 +1957,7 @@ export class CameraView {
       minimap.addEventListener('click', (e) => {
         e.stopPropagation(); // always prevent bubbling to cam click handler
         if (mmMoved || this._zoom.scale <= 1) return;
-        const canvas = minimap.querySelector('.cam-minimap-canvas');
+        const canvas = this._dom.minimapCanvas;
         const mr = canvas.getBoundingClientRect();
         const fx = (e.clientX - mr.left) / mr.width;
         const fy = (e.clientY - mr.top) / mr.height;
@@ -1555,7 +1997,7 @@ export class CameraView {
       { label: this.video.muted ? '🔇' : '🔊', text: 'Audio', action: () => {
         this._hideQuickMenu();
         this.video.muted = !this.video.muted;
-        this._audioIcon.classList.toggle('unmuted', !this.video.muted);
+        this._setAudioUnmuted(!this.video.muted);
       }},
       { label: '☑', text: 'Select', action: () => { this._hideQuickMenu(); this.toggleSelect(); }},
     ];
@@ -1578,7 +2020,7 @@ export class CameraView {
 
   _hideQuickMenu() {
     clearTimeout(this._quickMenuTimer);
-    this.el.querySelector('.cam-quick-menu')?.remove();
+    this._dom.quickMenu?.remove();
   }
 
   // ── Private: DOM creation ──
@@ -1625,6 +2067,16 @@ export class CameraView {
         <div class="cam-info-inline"></div>
         <div class="cam-top-right">
           <span class="cam-zoom-badge"></span>
+          <div class="cam-audio-wrap" title="Toggle audio — click to unmute">
+            <svg class="cam-audio" viewBox="0 0 24 24" fill="white">
+              <path d="M14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77zM16.5 12c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM3 9v6h4l5 5V4L7 9H3z"/>
+            </svg>
+          </div>
+          <div class="cam-mic-status" title="Intercom — click to toggle (T)">
+            <svg viewBox="0 0 24 24" fill="white">
+              <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm-1-9c0-.55.45-1 1-1s1 .45 1 1v6c0 .55-.45 1-1 1s-1-.45-1-1V5zm6 6c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/>
+            </svg>
+          </div>
           <div class="cam-quality-toggle" title="Toggle SD/HD stream (H)">
             <span class="quality-opt quality-sd active">SD</span>
             <span class="quality-opt quality-hd">HD</span>
@@ -1634,14 +2086,17 @@ export class CameraView {
           </svg>
         </div>
         <div class="cam-badges">
-          <div class="cam-audio-wrap" title="Toggle audio — click to unmute">
-            <svg class="cam-audio" viewBox="0 0 24 24" fill="white">
-              <path d="M14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77zM16.5 12c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM3 9v6h4l5 5V4L7 9H3z"/>
-            </svg>
-          </div>
           <span class="cam-mode"></span>
           <div class="cam-status"></div>
         </div>
+      </div>
+      <div class="cam-ptt" title="Push to talk — hold to speak">
+        <div class="cam-ptt-circle">
+          <svg viewBox="0 0 24 24" fill="white">
+            <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm-1-9c0-.55.45-1 1-1s1 .45 1 1v6c0 .55-.45 1-1 1s-1-.45-1-1V5zm6 6c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/>
+          </svg>
+        </div>
+        <span class="cam-ptt-timer">0:00</span>
       </div>
       <div class="cam-playback-panel">
         <div class="playback-row">
@@ -1651,7 +2106,7 @@ export class CameraView {
         </div>
         <div class="playback-row">
           <select class="playback-resolution" title="Video resolution for playback">
-            <option value="original">Original</option>
+            <option value="original">SRC</option>
             <option value="1080p">1080p</option>
             <option value="720p">720p</option>
             <option value="480p">480p</option>
@@ -1744,6 +2199,16 @@ export class CameraView {
       <div class="cam-grid-hud">
         <div class="ghud-info">
           <span class="ghud-name">${this.id}</span>
+          <div class="ghud-audio-wrap">
+            <svg class="ghud-audio" viewBox="0 0 24 24" fill="white">
+              <path d="M14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77zM16.5 12c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM3 9v6h4l5 5V4L7 9H3z"/>
+            </svg>
+          </div>
+          <div class="ghud-mic-wrap">
+            <svg class="ghud-mic" viewBox="0 0 24 24" fill="white">
+              <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm-1-9c0-.55.45-1 1-1s1 .45 1 1v6c0 .55-.45 1-1 1s-1-.45-1-1V5zm6 6c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/>
+            </svg>
+          </div>
           <span class="ghud-status">
             <span class="ghud-rec-dot"></span>
             <span class="ghud-rec-label">REC</span>
@@ -1753,6 +2218,11 @@ export class CameraView {
           <button class="ghud-day-prev">◂</button>
           <span class="ghud-date"></span>
           <button class="ghud-day-next">▸</button>
+          <div class="ghud-quality">
+            <span class="ghud-q-sd active">SD</span>
+            <span class="ghud-q-hd">HD</span>
+            <span class="ghud-q-res"></span>
+          </div>
         </div>
         <div class="ghud-bar">
           <div class="ghud-fill"></div>
@@ -1769,19 +2239,33 @@ export class CameraView {
 
   // ── Private: event binding ──
 
-  _bindPlayerEvents() {
-    this.player.onStatusChange = (online) => {
+  /**
+   * Wire CamPlayer callbacks to CameraView DOM updates.
+   * Called for SD, HD, and Playback players — mode determines badge text.
+   * @param {CamPlayer} player
+   * @param {'sd'|'hd'|'playback'} mode
+   */
+  _wirePlayer(player, mode) {
+    player.onStatusChange = (online) => {
       this._statusDot.classList.toggle('live', online);
-      this.timeline.push({ time: Date.now(), online });
-      if (this.onStatusChange) this.onStatusChange(this, online);
+      if (mode === 'sd') {
+        this.timeline.push({ time: Date.now(), online });
+        if (this.onStatusChange) this.onStatusChange(this, online);
+      }
     };
 
-    this.player.onModeChange = (mode) => {
-      this._modeBadge.textContent = `${mode.toUpperCase()} ●LIVE`;
-      this._modeBadge.className = `cam-mode ${mode}`;
+    player.onModeChange = (transport) => {
+      if (mode === 'playback') {
+        this._modeBadge.className = 'cam-mode playback';
+        this._updatePlaybackBadge(transport);
+      } else {
+        const suffix = mode === 'hd' ? ' HD' : '';
+        this._modeBadge.textContent = `${transport.toUpperCase()} ●LIVE${suffix}`;
+        this._modeBadge.className = `cam-mode ${transport}`;
+      }
     };
 
-    this.player.onStage = (stage) => {
+    player.onStage = (stage) => {
       if (stage === 'playing') {
         this._hideLoading();
       } else {
@@ -1789,17 +2273,42 @@ export class CameraView {
       }
     };
 
-    this.player.onNeedTranscode = () => {
-      if (this.onNeedTranscode) this.onNeedTranscode(this);
-    };
-
-    this.player.onConnectionError = (name) => {
-      if (this.onConnectionError) this.onConnectionError(this);
-    };
-
-    this.player.onStreamNotFound = (name) => {
-      if (this.onStreamNotFound) this.onStreamNotFound(this);
-    };
+    // Error/recovery callbacks
+    if (mode === 'sd') {
+      player.onNeedTranscode = () => {
+        if (this.onNeedTranscode) this.onNeedTranscode(this);
+      };
+      player.onConnectionError = () => {
+        if (this.onConnectionError) this.onConnectionError(this);
+      };
+      player.onStreamNotFound = () => {
+        if (this.onStreamNotFound) this.onStreamNotFound(this);
+      };
+    } else if (mode === 'hd') {
+      // HD connection failed — auto-fallback to SD, notify app to clean up backend stream
+      player.onConnectionError = () => {
+        console.warn(`[camera-view] ${this.id}: HD connection error, falling back to SD`);
+        this._hdPlayer?.disable();
+        this._hdPlayer = null;
+        const failedStream = this._hdStream;
+        this._hdStream = null;
+        this._state.quality.current = 'sd';
+        this._state.quality.loading = null;
+        this._state.quality.pending = null;
+        this._switchPlayer(this.player);
+        this._renderQuality();
+        if (this.onHdError) this.onHdError(this, failedStream);
+      };
+      player.onStreamNotFound = () => {
+        console.warn(`[camera-view] ${this.id}: HD stream lost, falling back to SD`);
+        player.onConnectionError();
+      };
+    } else if (mode === 'playback') {
+      player.onConnectionError = () => {
+        console.warn(`[camera-view] ${this.id}: playback connection error`);
+        this._showLoading('connection error');
+      };
+    }
   }
 
   _bindDOMEvents() {
@@ -1809,9 +2318,13 @@ export class CameraView {
       if (e.target.closest('.cam-playback-btn')) return;
       if (e.target.closest('.cam-playback-panel')) return;
       if (e.target.closest('.cam-audio-wrap')) return;
+      if (e.target.closest('.cam-mic-status')) return;
+      if (e.target.closest('.cam-ptt')) return;
       if (e.target.closest('.cam-select')) return;
       if (e.target.closest('.cam-grid-hud')) return;
       if (e.target.closest('.ghud-live-btn')) return;
+      if (e.target.closest('.ghud-audio-wrap')) return;
+      if (e.target.closest('.ghud-mic-wrap')) return;
       if (e.target.closest('.seek-info-row')) return;
       if ((e.ctrlKey || e.metaKey) && !this.el.classList.contains('fullscreen')) {
         this.toggleSelect();
@@ -1821,7 +2334,7 @@ export class CameraView {
     });
 
     // Checkbox click → toggle selection
-    this.el.querySelector('.cam-select').addEventListener('click', (e) => {
+    this._dom.selectBadge.addEventListener('click', (e) => {
       e.stopPropagation();
       this.toggleSelect();
     });
@@ -1831,7 +2344,11 @@ export class CameraView {
       e.preventDefault();
       if (e.target.closest('.cam-playback-panel')) return;
       if (e.target.closest('.cam-grid-hud')) return;
+      if (e.target.closest('.cam-ptt')) return;
+      if (e.target.closest('.cam-mic-status')) return;
       if (e.target.closest('.ghud-live-btn')) return;
+      if (e.target.closest('.ghud-audio-wrap')) return;
+      if (e.target.closest('.ghud-mic-wrap')) return;
       if (e.target.closest('.seek-info-row')) return;
       if (this.el.classList.contains('fullscreen')) {
         this.togglePause();
@@ -1843,34 +2360,74 @@ export class CameraView {
     // Audio icon — toggle mute (only if camera has audio)
     this._audioIcon.addEventListener('click', (e) => {
       e.stopPropagation();
-      if (!this._audioIcon.classList.contains('has-audio')) return;
+      if (!this._state.audio.available) return;
       if (CameraView.globalMute) CameraView.globalMute = false;
       this.video.muted = !this.video.muted;
-      this._audioIcon.classList.toggle('unmuted', !this.video.muted);
+      this._setAudioUnmuted(!this.video.muted);
     });
+
+    // Top-right mic status — click to toggle intercom
+    const micStatus = this._dom.micStatus;
+    if (micStatus) {
+      micStatus.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (!this._state.talkback.available) return;
+        this.toggleTalkback();
+      });
+      micStatus.addEventListener('mousedown', (e) => { e.stopPropagation(); });
+      micStatus.addEventListener('dblclick', (e) => { e.stopPropagation(); });
+    }
+
+    // PTT (push-to-talk) — hold to speak, double-click to lock
+    const ptt = this._dom.ptt;
+    if (ptt) {
+      const pttDown = (e) => {
+        e.stopPropagation();
+        e.preventDefault();
+        // If locked, any press stops it
+        if (this._state.talkback.locked) {
+          this.stopTalkback(true);
+          return;
+        }
+        this.startTalkback(false);
+      };
+      const pttUp = (e) => {
+        e.stopPropagation();
+        this.stopTalkback(); // respects locked — won't stop if locked
+      };
+      ptt.addEventListener('mousedown', pttDown);
+      ptt.addEventListener('touchstart', pttDown, { passive: false });
+      ptt.addEventListener('mouseup', pttUp);
+      ptt.addEventListener('mouseleave', pttUp);
+      ptt.addEventListener('touchend', pttUp);
+      ptt.addEventListener('touchcancel', pttUp);
+      // Double-click: toggle lock mode
+      ptt.addEventListener('dblclick', (e) => {
+        e.stopPropagation();
+        e.preventDefault();
+        this.toggleTalkback();
+      });
+    }
 
     // SD/HD quality toggle
     this._qualityToggle.addEventListener('click', (e) => {
       e.stopPropagation();
       if (this.isPlayback) return;
-
-      // Detect which button was clicked
       const clickedOpt = e.target.closest('.quality-opt');
-      if (!clickedOpt || clickedOpt.classList.contains('active')) return; // already in this mode
-
+      if (!clickedOpt) return;
       const wantHd = clickedOpt.classList.contains('quality-hd');
-      // Show loading fill-wipe on the clicked (target) button
-      clickedOpt.classList.add('loading');
+      if (wantHd === (this._state.quality.current === 'hd')) return;
+      this._setQualityLoading(wantHd ? 'hd' : 'sd');
       if (this.onHdToggle) this.onHdToggle(this, wantHd);
     });
 
     // Playback button — toggle panel
-    const playbackBtn = this.el.querySelector('.cam-playback-btn');
+    const playbackBtn = this._dom.playbackBtn;
     // Stop mousedown on entire playback panel to prevent fullscreen toggle on long press
-    this.el.querySelector('.cam-playback-panel').addEventListener('mousedown', (e) => e.stopPropagation());
+    this._dom.playbackPanel.addEventListener('mousedown', (e) => e.stopPropagation());
     playbackBtn.addEventListener('click', (e) => {
       e.stopPropagation();
-      const panel = this.el.querySelector('.cam-playback-panel');
+      const panel = this._dom.playbackPanel;
       panel.classList.toggle('open');
       playbackBtn.classList.toggle('active', panel.classList.contains('open'));
 
@@ -1878,56 +2435,52 @@ export class CameraView {
       if (panel.classList.contains('open')) {
         const now = new Date();
         const ago = new Date(now.getTime() - 3600 * 1000);
-        const pad = (n) => String(n).padStart(2, '0');
-        const fmt = (d) => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-        const endOfDay = (d) => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T23:59`;
-        panel.querySelector('.playback-start').value = fmt(ago);
-        panel.querySelector('.playback-end').value = endOfDay(ago);
+        const endOfDay = (d) => `${d.getFullYear()}-${_pad(d.getMonth()+1)}-${_pad(d.getDate())}T23:59`;
+        this._dom.pbStart.value = _fmtInput(ago);
+        this._dom.pbEnd.value = endOfDay(ago);
       }
     });
 
     // auto-set end to 23:59 of same day when start changes
-    this.el.querySelector('.playback-start').addEventListener('change', (e) => {
+    this._dom.pbStart.addEventListener('change', (e) => {
       e.stopPropagation();
       const val = e.target.value;
       if (val) {
         const d = new Date(val);
-        const pad = (n) => String(n).padStart(2, '0');
-        this.el.querySelector('.playback-end').value =
-          `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T23:59`;
+        this._dom.pbEnd.value =
+          `${d.getFullYear()}-${_pad(d.getMonth()+1)}-${_pad(d.getDate())}T23:59`;
       }
       this._markPendingChange(e.target);
     });
 
-    this.el.querySelector('.playback-end').addEventListener('change', (e) => {
+    this._dom.pbEnd.addEventListener('change', (e) => {
       e.stopPropagation();
       this._markPendingChange(e.target);
     });
 
-    this.el.querySelector('.playback-resolution').addEventListener('change', (e) => {
+    this._dom.pbResolution.addEventListener('change', (e) => {
       e.stopPropagation();
       this._markPendingChange(e.target);
-      // Update resolution label in quality toggle
-      if (this._qualityToggle.dataset.mode === 'playback') {
-        const val = e.target.value;
-        this._qualityToggle.querySelector('.quality-res').textContent = val === 'original' ? 'Original' : val;
+      if (this.isPlayback) {
+        this._state.quality.playbackRes = e.target.value;
+        this._renderQuality();
       }
     });
 
     // Play button
-    this.el.querySelector('.playback-go').addEventListener('click', (e) => {
+    this._dom.pbGo.addEventListener('click', (e) => {
       e.stopPropagation();
       this._clearPendingChange();
-      const start = this.el.querySelector('.playback-start').value;
-      const end = this.el.querySelector('.playback-end').value;
-      const resolution = this.el.querySelector('.playback-resolution').value;
+      const start = this._dom.pbStart.value;
+      const end = this._dom.pbEnd.value;
+      const resolution = this._dom.pbResolution.value;
       if (start && end && this.onPlaybackRequest) {
         this.onPlaybackRequest(this, start, end, resolution);
       }
     });
 
     // Live button
-    const liveBtn = this.el.querySelector('.playback-live');
+    const liveBtn = this._dom.pbLive;
     liveBtn.classList.add('active'); // live by default
     liveBtn.addEventListener('mousedown', (e) => e.stopPropagation());
     liveBtn.addEventListener('click', (e) => {
@@ -1952,12 +2505,10 @@ export class CameraView {
         } else if (offset < 0 && this.onPlaybackRequest) {
           // Live mode + negative offset: start archive from now+offset
           const seekTime = new Date(Date.now() + offset * 1000);
-          const pad = (n) => String(n).padStart(2, '0');
-          const fmt = (d) => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
           const endOfDay = new Date(seekTime);
           endOfDay.setHours(23, 59, 59, 0);
-          const resolution = this.el.querySelector('.playback-resolution').value;
-          this.onPlaybackRequest(this, fmt(seekTime), fmt(endOfDay), resolution);
+          const resolution = this._dom.pbResolution.value;
+          this.onPlaybackRequest(this, _fmtFull(seekTime), _fmtFull(endOfDay), resolution);
         }
       });
     });
@@ -1977,18 +2528,18 @@ export class CameraView {
     });
 
     // Seek timeline — click to seek
-    const seekBar = this.el.querySelector('.seek-bar');
-    const seekTooltip = this.el.querySelector('.seek-time-tooltip');
-    const seekDot = this.el.querySelector('.seek-thumb-dot');
-    const seekRingFill = this.el.querySelector('.seek-ring-fill');
-    const seekThumb = this.el.querySelector('.seek-thumbnail');
-    const seekThumbImg = seekThumb?.querySelector('img');
-    const seekThumbTime = seekThumb?.querySelector('.seek-thumb-time');
-    const seekThumbProgress = seekThumb?.querySelector('.seek-thumb-progress');
-    const seekThumbSpinner = seekThumb?.querySelector('.seek-thumb-spinner');
-    const seekMarker = this.el.querySelector('.seek-thumb-marker');
-    const livePill = this.el.querySelector('.seek-live-pill');
-    const cursorDetail = this.el.querySelector('.seek-cursor-detail');
+    const seekBar = this._dom.seekBar;
+    const seekTooltip = this._dom.seekTooltip;
+    const seekDot = this._dom.seekThumbDot;
+    const seekRingFill = this._dom.seekRingFill;
+    const seekThumb = this._dom.seekThumbnail;
+    const seekThumbImg = this._dom.seekThumbImg;
+    const seekThumbTime = this._dom.seekThumbTime;
+    const seekThumbProgress = this._dom.seekThumbProgress;
+    const seekThumbSpinner = this._dom.seekThumbSpinner;
+    const seekMarker = this._dom.seekThumbMarker;
+    const livePill = this._dom.seekLivePill;
+    const cursorDetail = this._dom.seekCursorDetail;
     let thumbDotTimer = null;
     let thumbFetchTimer = null;
     let thumbLastKey = '';
@@ -2020,10 +2571,8 @@ export class CameraView {
         if (this.isPlayback && this.onPlaybackSeek) {
           this.onPlaybackSeek(this, seekDate);
         } else if (this.onPlaybackRequest) {
-          const pad = (n) => String(n).padStart(2, '0');
-          const fmt = (d) => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
           const endOfDay = new Date(seekDate); endOfDay.setHours(23, 59, 59, 0);
-          this.onPlaybackRequest(this, fmt(seekDate), fmt(endOfDay), 'original');
+          this.onPlaybackRequest(this, _fmtFull(seekDate), _fmtFull(endOfDay), 'original');
         }
       });
     }
@@ -2040,9 +2589,8 @@ export class CameraView {
     seekBar.addEventListener('mousemove', (e) => {
       e.stopPropagation();
       const { fraction, hours, minutes } = getSeekTime(e);
-      const pad = (n) => String(n).padStart(2, '0');
-      const timeText = `${pad(hours)}:${pad(minutes)}`;
-      const cursorTime = this.el.querySelector('.seek-cursor-time');
+      const timeText = `${_pad(hours)}:${_pad(minutes)}`;
+      const cursorTime = this._dom.seekCursorTime;
       const full = this.el.classList.contains('fullscreen');
 
       const cursorDist = Math.abs(fraction - (this._seekCursorFraction || -1));
@@ -2052,13 +2600,13 @@ export class CameraView {
         if (cursorDist < 0.03 && this._seekCursorFraction !== undefined) {
           const pos = this.playbackPosition;
           if (pos) {
-            const ct = `${pad(pos.getHours())}:${pad(pos.getMinutes())}`;
+            const ct = _hm(pos);
             const now = new Date();
             const diffMs = now - pos;
             const diffMin = Math.floor(Math.abs(diffMs) / 60000);
             const dH = Math.floor(diffMin / 60);
             const dM = diffMin % 60;
-            const delta = dH > 0 ? `-${dH}h${pad(dM)}m` : `-${dM}m`;
+            const delta = dH > 0 ? `-${dH}h${_pad(dM)}m` : `-${dM}m`;
             cursorDetail.innerHTML = `<span class="scd-time">${ct}</span><span class="scd-delta">${delta}</span>`;
           }
           cursorDetail.style.left = `${(this._seekCursorFraction) * 100}%`;
@@ -2104,8 +2652,7 @@ export class CameraView {
       // Thumbnail preview: works on LIVE (past time = archive) and playback timeline
       const thumbDate0 = this._playbackDate || (() => { const d = new Date(); d.setHours(0,0,0,0); return d; })();
       if (seekDot && seekThumb && !isUnavailable) {
-        const pad2 = (n) => String(n).padStart(2, '0');
-        const key = `${this.id}_${pad2(hours)}${pad2(minutes)}`;
+        const key = `${this.id}_${_pad(hours)}${_pad(minutes)}`;
         const pct = `${fraction * 100}%`;
 
         // When pinned: thumbnail stays at fixed position, only dot/tooltip follow cursor
@@ -2148,7 +2695,7 @@ export class CameraView {
             if (thumbLastKey !== key) return;
             thumbState = 'loading';
             seekDot.classList.add('visible');
-            if (seekThumbTime) seekThumbTime.textContent = `${pad2(thisHours)}:${pad2(thisMinutes)}`;
+            if (seekThumbTime) seekThumbTime.textContent = `${_pad(thisHours)}:${_pad(thisMinutes)}`;
 
             // Show marker dot on timeline
             if (seekMarker) {
@@ -2165,7 +2712,7 @@ export class CameraView {
             // Start fetch
             const thumbDate = new Date(thumbDate0);
             thumbDate.setHours(thisHours, thisMinutes, 0, 0);
-            const iso = `${thumbDate.getFullYear()}-${pad2(thumbDate.getMonth()+1)}-${pad2(thumbDate.getDate())}T${pad2(thisHours)}:${pad2(thisMinutes)}:00`;
+            const iso = _fmtFull(thumbDate);
 
             const xhr = new XMLHttpRequest();
             this._thumbXHR = xhr;
@@ -2272,12 +2819,10 @@ export class CameraView {
         const seekTime = new Date(now);
         seekTime.setHours(hours, minutes, 0, 0);
         if (seekTime > now) return; // future
-        const pad = (n) => String(n).padStart(2, '0');
-        const fmt = (d) => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
         const endOfDay = new Date(now);
         endOfDay.setHours(23, 59, 59, 0);
-        const resolution = this.el.querySelector('.playback-resolution')?.value || 'original';
-        this.onPlaybackRequest(this, fmt(seekTime), fmt(endOfDay), resolution);
+        const resolution = this._dom.pbResolution?.value || 'original';
+        this.onPlaybackRequest(this, _fmtFull(seekTime), _fmtFull(endOfDay), resolution);
         return;
       }
 
@@ -2286,7 +2831,7 @@ export class CameraView {
       seekTime.setHours(hours, minutes, 0, 0);
       // Click in unavailable zone → go to live
       if (this._isSeekUnavailable(seekTime)) {
-        const liveBtn = this.el.querySelector('.playback-live');
+        const liveBtn = this._dom.pbLive;
         if (liveBtn) liveBtn.click();
         return;
       }
@@ -2294,18 +2839,18 @@ export class CameraView {
     });
 
     // Day navigation (◀ ▶) on seek timeline
-    this.el.querySelector('.seek-day-prev').addEventListener('click', (e) => {
+    this._dom.seekDayPrev.addEventListener('click', (e) => {
       e.stopPropagation();
       if (!this._playbackDate || !this.onPlaybackSeek) return;
       const pos = this.playbackPosition;
-      const timeOfDay = pos ? (pos.getHours() * 3600 + pos.getMinutes() * 60 + pos.getSeconds()) : 0;
+      const timeOfDay = pos ? (_daySeconds(pos)) : 0;
       const prevDay = new Date(this._playbackDate.getTime() - 86400000);
       prevDay.setHours(0, 0, 0, 0);
       const seekTime = new Date(prevDay.getTime() + timeOfDay * 1000);
       this.onPlaybackSeek(this, seekTime);
     });
 
-    this.el.querySelector('.seek-day-next').addEventListener('click', (e) => {
+    this._dom.seekDayNext.addEventListener('click', (e) => {
       e.stopPropagation();
       if (!this._playbackDate || !this.onPlaybackSeek) return;
       const nextDay = new Date(this._playbackDate.getTime() + 86400000);
@@ -2313,7 +2858,7 @@ export class CameraView {
       const now = new Date();
       if (nextDay > now) return; // entire day is in future
       const pos = this.playbackPosition;
-      const timeOfDay = pos ? (pos.getHours() * 3600 + pos.getMinutes() * 60 + pos.getSeconds()) : 0;
+      const timeOfDay = pos ? (_daySeconds(pos)) : 0;
       let seekTime = new Date(nextDay.getTime() + timeOfDay * 1000);
       // If time-of-day hasn't arrived yet on target day, clamp to 00:00
       if (this._isSeekUnavailable(seekTime)) seekTime = new Date(nextDay);
@@ -2321,7 +2866,7 @@ export class CameraView {
     });
 
     // ── Grid HUD: LIVE button (long-press) ──
-    const ghudLiveBtn = this.el.querySelector('.ghud-live-btn');
+    const ghudLiveBtn = this._dom.ghudLiveBtn;
     let livePressTimer = null;
     let liveTriggered = false;
     const LIVE_HOLD_MS = 500;
@@ -2336,7 +2881,7 @@ export class CameraView {
         liveTriggered = true;
         ghudLiveBtn.classList.remove('pressing');
         ghudLiveBtn.classList.add('triggered');
-        const playbackLive = this.el.querySelector('.playback-live');
+        const playbackLive = this._dom.pbLive;
         if (playbackLive) playbackLive.click();
         setTimeout(() => ghudLiveBtn.classList.remove('triggered'), 300);
       }, LIVE_HOLD_MS);
@@ -2362,8 +2907,8 @@ export class CameraView {
     });
 
     // ── Grid HUD events ──
-    const ghudBar = this.el.querySelector('.ghud-bar');
-    const ghudTooltip = this.el.querySelector('.ghud-tooltip');
+    const ghudBar = this._dom.ghudBar;
+    const ghudTooltip = this._dom.ghudTooltip;
 
     const getGhudTime = (e) => {
       const rect = ghudBar.getBoundingClientRect();
@@ -2384,12 +2929,10 @@ export class CameraView {
         const seekTime = new Date(now);
         seekTime.setHours(hours, minutes, 0, 0);
         if (seekTime > now) return; // future
-        const pad = (n) => String(n).padStart(2, '0');
-        const fmt = (d) => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
         const endOfDay = new Date(now);
         endOfDay.setHours(23, 59, 59, 0);
-        const resolution = this.el.querySelector('.playback-resolution')?.value || 'original';
-        this.onPlaybackRequest(this, fmt(seekTime), fmt(endOfDay), resolution);
+        const resolution = this._dom.pbResolution?.value || 'original';
+        this.onPlaybackRequest(this, _fmtFull(seekTime), _fmtFull(endOfDay), resolution);
         return;
       }
 
@@ -2397,7 +2940,7 @@ export class CameraView {
       const seekTime = new Date(this._playbackDate);
       seekTime.setHours(hours, minutes, 0, 0);
       if (this._isSeekUnavailable(seekTime)) {
-        const liveBtn = this.el.querySelector('.playback-live');
+        const liveBtn = this._dom.pbLive;
         if (liveBtn) liveBtn.click();
         return;
       }
@@ -2407,8 +2950,7 @@ export class CameraView {
     ghudBar.addEventListener('mousemove', (e) => {
       e.stopPropagation();
       const { fraction, hours, minutes } = getGhudTime(e);
-      const pad = (n) => String(n).padStart(2, '0');
-      const timeText = `${pad(hours)}:${pad(minutes)}`;
+      const timeText = `${_pad(hours)}:${_pad(minutes)}`;
 
       let isUnavailable = false;
       if (this._playbackDate) {
@@ -2439,27 +2981,59 @@ export class CameraView {
     });
 
     // Grid HUD day navigation
-    this.el.querySelector('.ghud-day-prev').addEventListener('click', (e) => {
+    this._dom.ghudDayPrev.addEventListener('click', (e) => {
       e.stopPropagation();
       if (!this._playbackDate || !this.onPlaybackSeek) return;
       const pos = this.playbackPosition;
-      const timeOfDay = pos ? (pos.getHours() * 3600 + pos.getMinutes() * 60 + pos.getSeconds()) : 0;
+      const timeOfDay = pos ? (_daySeconds(pos)) : 0;
       const prevDay = new Date(this._playbackDate.getTime() - 86400000);
       prevDay.setHours(0, 0, 0, 0);
       this.onPlaybackSeek(this, new Date(prevDay.getTime() + timeOfDay * 1000));
     });
 
-    this.el.querySelector('.ghud-day-next').addEventListener('click', (e) => {
+    this._dom.ghudDayNext.addEventListener('click', (e) => {
       e.stopPropagation();
       if (!this._playbackDate || !this.onPlaybackSeek) return;
       const nextDay = new Date(this._playbackDate.getTime() + 86400000);
       nextDay.setHours(0, 0, 0, 0);
       if (nextDay > new Date()) return; // entire day is in future
       const pos = this.playbackPosition;
-      const timeOfDay = pos ? (pos.getHours() * 3600 + pos.getMinutes() * 60 + pos.getSeconds()) : 0;
+      const timeOfDay = pos ? (_daySeconds(pos)) : 0;
       let seekTime = new Date(nextDay.getTime() + timeOfDay * 1000);
       if (this._isSeekUnavailable(seekTime)) seekTime = new Date(nextDay);
       this.onPlaybackSeek(this, seekTime);
+    });
+
+    // Ghud audio icon — sync with main audio toggle
+    this._ghudAudio?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (!this._state.audio.available) return;
+      if (CameraView.globalMute) CameraView.globalMute = false;
+      this.video.muted = !this.video.muted;
+      this._setAudioUnmuted(!this.video.muted);
+    });
+    this._ghudAudio?.addEventListener('mousedown', (e) => { e.stopPropagation(); });
+    this._ghudAudio?.addEventListener('dblclick', (e) => { e.stopPropagation(); });
+
+    // Ghud mic icon — toggle talkback
+    this._dom.ghudMic?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (!this._state.talkback.available) return;
+      this.toggleTalkback();
+    });
+    this._dom.ghudMic?.addEventListener('mousedown', (e) => { e.stopPropagation(); });
+    this._dom.ghudMic?.addEventListener('dblclick', (e) => { e.stopPropagation(); });
+
+    // Ghud SD/HD quality toggle
+    this._ghudQuality?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (this.isPlayback) return;
+      const clickedOpt = e.target.closest('.ghud-q-sd, .ghud-q-hd');
+      if (!clickedOpt) return;
+      const wantHd = clickedOpt.classList.contains('ghud-q-hd');
+      if (wantHd === (this._state.quality.current === 'hd')) return;
+      this._setQualityLoading(wantHd ? 'hd' : 'sd');
+      if (this.onHdToggle) this.onHdToggle(this, wantHd);
     });
 
     // ── Fullscreen HUD: seek buttons ──
@@ -2477,38 +3051,34 @@ export class CameraView {
         } else if (offset < 0 && this.onPlaybackRequest) {
           // LIVE: start archive from now+offset
           const seekTime = new Date(Date.now() + offset * 1000);
-          const pad = (n) => String(n).padStart(2, '0');
-          const fmt = (d) => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
           const endOfDay = new Date(seekTime);
           endOfDay.setHours(23, 59, 59, 0);
-          const resolution = this.el.querySelector('.playback-resolution').value;
-          this.onPlaybackRequest(this, fmt(seekTime), fmt(endOfDay), resolution);
+          const resolution = this._dom.pbResolution.value;
+          this.onPlaybackRequest(this, _fmtFull(seekTime), _fmtFull(endOfDay), resolution);
         }
       });
     });
 
     // ── Fullscreen HUD: time button → toggle playback panel ──
-    this.el.querySelector('.seek-info-time-btn').addEventListener('click', (e) => {
+    this._dom.seekInfoTimeBtn.addEventListener('click', (e) => {
       e.stopPropagation();
-      const panel = this.el.querySelector('.cam-playback-panel');
-      const pbBtn = this.el.querySelector('.cam-playback-btn');
+      const panel = this._dom.playbackPanel;
+      const pbBtn = this._dom.playbackBtn;
       panel.classList.toggle('open');
       if (pbBtn) pbBtn.classList.toggle('active', panel.classList.contains('open'));
       if (panel.classList.contains('open')) {
         const now = new Date();
         const ago = new Date(now.getTime() - 3600 * 1000);
-        const pad = (n) => String(n).padStart(2, '0');
-        const fmt = (d) => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-        const endOfDay = (d) => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T23:59`;
-        panel.querySelector('.playback-start').value = fmt(ago);
-        panel.querySelector('.playback-end').value = endOfDay(ago);
+        const endOfDay = (d) => `${d.getFullYear()}-${_pad(d.getMonth()+1)}-${_pad(d.getDate())}T23:59`;
+        this._dom.pbStart.value = _fmtInput(ago);
+        this._dom.pbEnd.value = endOfDay(ago);
       }
     });
 
     // ── Fullscreen HUD: ⋯ more seek buttons toggle ──
-    this.el.querySelector('.fs-seek-more').addEventListener('click', (e) => {
+    this._dom.fsSeekMore.addEventListener('click', (e) => {
       e.stopPropagation();
-      const extra = this.el.querySelector('.fs-seek-extra');
+      const extra = this._dom.fsSeekExtra;
       if (extra) extra.classList.toggle('open');
     });
 

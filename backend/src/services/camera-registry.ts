@@ -15,6 +15,8 @@ class CameraRegistry {
   private map = new Map<string, CameraEntry>();
   private providers: { name: string; provider: NvrProvider; cameras: CameraConfig[]; config: NvrConfig }[] = [];
   private nvrEntries: NvrEntry[] = [];
+  /** Camera IDs that support talkback. Populated by detectAllTalkback(). */
+  private talkbackCameras = new Set<string>();
 
   /** Initialize from NVR entries (parsed from oko.yaml). */
   init(nvrs: NvrEntry[]) {
@@ -122,6 +124,46 @@ class CameraRegistry {
       Object.assign(streams, provider.generateStreamConfig(cameras));
     }
     return streams;
+  }
+
+  /** Detect talkback capability across all NVRs. Call after init(). */
+  async detectAllTalkback(): Promise<void> {
+    console.log(`[talkback] Detecting two-way audio across ${this.providers.length} NVR(s)...`);
+    this.talkbackCameras.clear();
+    for (const { name, provider, cameras } of this.providers) {
+      // Manual override from oko.yaml
+      const nvrEntry = this.nvrEntries.find(n => n.name === name);
+      const manualChannels = new Set(nvrEntry?.talkback_channels || []);
+
+      // Auto-detect from NVR API
+      let autoChannels = new Set<number>();
+      try {
+        console.log(`[talkback] ${name} (${provider.type}): probing...`);
+        autoChannels = await provider.detectTalkback();
+        console.log(`[talkback] ${name}: auto-detected ${autoChannels.size} channels${autoChannels.size > 0 ? ': ' + [...autoChannels].join(', ') : ''}`);
+      } catch (e: any) {
+        console.warn(`[talkback] ${name}: auto-detection failed — ${e.message}`);
+      }
+
+      if (manualChannels.size > 0) {
+        console.log(`[talkback] ${name}: manual override ${manualChannels.size} channels: ${[...manualChannels].join(', ')}`);
+      }
+
+      // Merge: auto ∪ manual
+      const allChannels = new Set([...autoChannels, ...manualChannels]);
+
+      for (const cam of cameras) {
+        if (allChannels.has(cam.channel)) {
+          this.talkbackCameras.add(cam.id);
+        }
+      }
+    }
+    console.log(`[talkback] Result: ${this.talkbackCameras.size} cameras${this.talkbackCameras.size > 0 ? ' — ' + [...this.talkbackCameras].join(', ') : ''}`);
+  }
+
+  /** Check if camera supports talkback. */
+  hasTalkback(cameraId: string): boolean {
+    return this.talkbackCameras.has(cameraId);
   }
 }
 

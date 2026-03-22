@@ -83,4 +83,12 @@ export class GenericProvider implements NvrProvider {
   async discoverChannels(): Promise<DiscoveredCamera[] | null> {
     return null;
   }
+
+  async detectTalkback(): Promise<Set<number>> {
+    return new Set();
+  }
+
+  getTalkbackSource(_camera: CameraConfig): string | null {
+    return null;
+  }
 }

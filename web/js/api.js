@@ -159,4 +159,23 @@ export class ApiClient {
       body: JSON.stringify({ nvr: nvrName }),
     }).catch(() => {});
   }
+
+  /** Start talkback (two-way audio) for a camera. Returns { stream, camera }. */
+  async startTalkback(cameraId) {
+    const res = await fetch(`${BACKEND_URL}/talkback/${encodeURIComponent(cameraId)}/start`, {
+      method: 'POST',
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || `Talkback failed: ${res.status}`);
+    }
+    return res.json();
+  }
+
+  /** Stop talkback for a camera. */
+  async stopTalkback(cameraId) {
+    await fetch(`${BACKEND_URL}/talkback/${encodeURIComponent(cameraId)}/stop`, {
+      method: 'DELETE',
+    }).catch(() => {});
+  }
 }
