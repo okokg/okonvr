@@ -30,6 +30,22 @@
         <span class="h265-badge" id="h265-badge" style="display:none" title="H.265/HEVC WebRTC supported — no transcoding needed">H.265</span>
       </div>
       <div class="clock" id="clock"></div>
+      <span class="watch-badge" id="watch-badge"></span>
+      <div class="watch-wrap">
+        <button class="header-btn watch-btn" id="watch-btn" title="Watch mode — detect motion (W)">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z"/></svg>
+        </button><button class="header-btn watch-cfg-btn" id="watch-cfg-btn" title="Watch settings">&#9662;</button>
+        <div class="watch-popup" id="watch-popup">
+          <div class="watch-popup-row">
+            <span class="watch-popup-label">Sensitivity</span>
+            <input type="range" class="watch-slider" id="watch-sensitivity" min="1" max="10" value="5" step="1">
+            <span class="watch-slider-val" id="watch-sensitivity-val">5</span>
+          </div>
+          <label class="watch-popup-row watch-filter-label">
+            <input type="checkbox" id="watch-filter"> Motion only
+          </label>
+        </div>
+      </div>
       <button class="header-btn" id="compact-btn" title="Compact mode — hide header &amp; controls (C to toggle)">&#9881;</button>
       <button class="header-btn" id="theme-btn" title="Toggle light/dark theme (T)">&#9788;</button>
     </div>

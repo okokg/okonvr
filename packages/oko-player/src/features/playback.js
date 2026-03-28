@@ -29,6 +29,7 @@ export class PlaybackFeature extends Feature {
     this._events = [];        // Smart motion events [{start, end, type}]
     this._eventsDate = null;  // Date string of cached events
     this._activeEventIdx = -1; // Index of event at current playback position
+    this._liveEventsTimer = null; // Refresh timer for live mode events
 
     this._injectDOM();
     this._cacheDom();
@@ -45,6 +46,8 @@ export class PlaybackFeature extends Feature {
     if (!this.isActive) {
       // LIVE mode — set seek info
       if (this._dom.seekInfoRecText) this._dom.seekInfoRecText.textContent = 'LIVE';
+      // Fetch SMD events for today
+      this._startLiveEventsRefresh();
     } else {
       view.el.classList.remove('fs-live');
     }
@@ -62,6 +65,8 @@ export class PlaybackFeature extends Feature {
     this._panelWasOpen = panel?.classList.contains('open');
     panel?.classList.remove('open');
     this._dom.playbackBtn?.classList.remove('active');
+    // Stop live event refresh (will restart on next fullscreen enter)
+    this._stopLiveEventsRefresh();
   }
 
   onLiveTimeUpdate(now, pct, timeStr) {
@@ -91,6 +96,7 @@ export class PlaybackFeature extends Feature {
 
   onDisable() {
     this.stopTimer();
+    this._stopLiveEventsRefresh();
     clearInterval(this._nowMarkerTimer);
     if (this._player) {
       this._player.disable();
@@ -147,6 +153,7 @@ export class PlaybackFeature extends Feature {
 
     const view = this._view;
     this.stopTimer();
+    this._stopLiveEventsRefresh();
     this._clearPendingChange();
 
     // Stop talkback if active
@@ -241,19 +248,25 @@ export class PlaybackFeature extends Feature {
     if (this._dom.ghudUnavailable) this._dom.ghudUnavailable.style.display = '';
     if (this._dom.ghudNow) this._dom.ghudNow.style.display = '';
 
-    // Clear smart event markers
-    if (this._dom.seekEvents) this._dom.seekEvents.innerHTML = '';
-    if (this._dom.ghudEvents) this._dom.ghudEvents.innerHTML = '';
-    this._events = [];
-    this._eventsDate = null;
+    // Clear smart event markers & UI
     this._activeEventIdx = -1;
-
-    // Clear SMD UI
     if (this._dom.smdBadge) { this._dom.smdBadge.innerHTML = ''; this._dom.smdBadge.classList.remove('visible'); }
     if (this._dom.smdNav) this._dom.smdNav.style.display = 'none';
     if (this._dom.smdTooltip) this._dom.smdTooltip.classList.remove('visible');
     const ghudSmd = this._view._dom.ghudInfo?.querySelector('.ghud-smd');
     if (ghudSmd) ghudSmd.remove();
+
+    // If returning to live in fullscreen — keep events, restart refresh
+    // Otherwise clear everything
+    if (view.isFullscreen) {
+      this._eventsDate = null; // force refetch on next cycle
+      this._startLiveEventsRefresh();
+    } else {
+      if (this._dom.seekEvents) this._dom.seekEvents.innerHTML = '';
+      if (this._dom.ghudEvents) this._dom.ghudEvents.innerHTML = '';
+      this._events = [];
+      this._eventsDate = null;
+    }
 
     // Reset seek cursor positions
     if (this._dom.seekFill) this._dom.seekFill.style.width = '';
@@ -811,33 +824,58 @@ export class PlaybackFeature extends Feature {
 
   // ── Smart events on timeline ──
 
+  /** Fetch events for playback mode (uses this._date) */
   async _fetchEvents() {
     if (!this._date) return;
-    const id = this._view.id;
-    const y = this._date.getFullYear();
-    const m = String(this._date.getMonth() + 1).padStart(2, '0');
-    const d = String(this._date.getDate()).padStart(2, '0');
-    const dateStr = `${y}-${m}-${d}`;
-
+    const dateStr = this._dateStr(this._date);
     if (this._eventsDate === dateStr) return;
+    await this._doFetchEvents(dateStr);
+  }
 
+  /** Fetch events for live mode (uses today, always fresh) */
+  async _fetchLiveEvents() {
+    const dateStr = this._dateStr(new Date());
+    await this._doFetchEvents(dateStr, true);
+  }
+
+  /** Common fetch logic */
+  async _doFetchEvents(dateStr, forLive = false) {
+    const id = this._view.id;
     try {
       const res = await fetch(`/backend/events/${id}?date=${dateStr}`);
-      if (!res.ok) { this._events = []; this._eventsDate = dateStr; this._renderEvents(); return; }
+      if (!res.ok) { this._events = []; this._eventsDate = dateStr; this._renderEvents(forLive); return; }
       const data = await res.json();
       this._events = data.events || [];
       this._eventsDate = dateStr;
       this._activeEventIdx = -1;
-      this._renderEvents();
-      this._updateActiveEvent();
+      this._renderEvents(forLive);
     } catch {
       this._events = [];
       this._eventsDate = dateStr;
-      this._renderEvents();
+      this._renderEvents(forLive);
     }
   }
 
-  _renderEvents() {
+  _dateStr(d) {
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  }
+
+  /** Start 60s refresh cycle for live mode events */
+  _startLiveEventsRefresh() {
+    this._stopLiveEventsRefresh();
+    this._fetchLiveEvents();
+    this._liveEventsTimer = setInterval(() => this._fetchLiveEvents(), 60000);
+  }
+
+  /** Stop live events refresh */
+  _stopLiveEventsRefresh() {
+    if (this._liveEventsTimer) {
+      clearInterval(this._liveEventsTimer);
+      this._liveEventsTimer = null;
+    }
+  }
+
+  _renderEvents(forLive = false) {
     const tooltip = this._dom.smdTooltip;
 
     for (const container of [this._dom.seekEvents, this._dom.ghudEvents]) {
@@ -855,26 +893,40 @@ export class PlaybackFeature extends Feature {
         marker.style.left = `${left}%`;
         marker.style.width = `${width}%`;
 
-        // Click → seek to event start
+        // Click → seek to event start (playback) or enter archive (live)
         marker.addEventListener('click', (e) => {
           e.stopPropagation();
           const sec = ev.start;
-          const baseDate = this._date || new Date();
-          const seekDate = new Date(baseDate);
-          seekDate.setHours(0, 0, 0, 0);
-          seekDate.setSeconds(sec);
           const view = this._view;
+
           if (this.isActive && view.onPlaybackSeek) {
+            // Playback mode — seek within current session
+            const baseDate = this._date || new Date();
+            const seekDate = new Date(baseDate);
+            seekDate.setHours(0, 0, 0, 0);
+            seekDate.setSeconds(sec);
             view.onPlaybackSeek(view, seekDate);
+          } else if (view.onPlaybackRequest) {
+            // Live mode — enter archive at event time
+            this._stopLiveEventsRefresh();
+            const now = new Date();
+            const seekDate = new Date(now);
+            seekDate.setHours(0, 0, 0, 0);
+            seekDate.setSeconds(sec);
+            const endOfDay = new Date(now);
+            endOfDay.setHours(23, 59, 59, 0);
+            const resolution = this._dom.pbResolution?.value || 'original';
+            view.onPlaybackRequest(view, fmtFull(seekDate), fmtFull(endOfDay), resolution);
           }
         });
 
         // Hover tooltip (fullscreen seek-bar only)
         if (!isGhud && tooltip) {
-          marker.addEventListener('mouseenter', (e) => {
+          marker.addEventListener('mouseenter', () => {
             const label = ev.type === 'human' ? 'Human' : 'Vehicle';
             const color = ev.type === 'human' ? 'var(--danger)' : 'var(--warn)';
-            tooltip.innerHTML = `<span class="smd-tooltip-dot" style="background:${color}"></span><span class="smd-tooltip-type">${label}</span><span class="smd-tooltip-time">${this._fmtSec(ev.start)} — ${this._fmtSec(ev.end)}</span>`;
+            const extra = forLive ? '<span class="smd-tooltip-hint">click to view in archive</span>' : '';
+            tooltip.innerHTML = `<span class="smd-tooltip-dot" style="background:${color}"></span><span class="smd-tooltip-type">${label}</span><span class="smd-tooltip-time">${this._fmtSec(ev.start)} — ${this._fmtSec(ev.end)}</span>${extra}`;
             tooltip.classList.add('visible');
             const barRect = this._dom.seekBar?.getBoundingClientRect();
             const markerRect = marker.getBoundingClientRect();
@@ -892,9 +944,13 @@ export class PlaybackFeature extends Feature {
       }
     }
 
-    // Update nav visibility
-    this._updateEventNav();
-    this._updateGhudEventBadge();
+    // Update nav/badge based on mode
+    if (forLive) {
+      this._updateLiveEventCount();
+    } else {
+      this._updateEventNav();
+      this._updateGhudEventBadge();
+    }
   }
 
   /** Called from _updatePosition — check if playback is inside an event */
@@ -1007,6 +1063,22 @@ export class PlaybackFeature extends Feature {
       badge.className = 'ghud-smd';
       badge.textContent = `${this._events.length} ev`;
     }
+  }
+
+  /** Show event count in fullscreen info row (live mode) */
+  _updateLiveEventCount() {
+    const badge = this._dom.smdBadge;
+    if (!badge) return;
+    if (!this._events.length) {
+      badge.innerHTML = '';
+      badge.classList.remove('visible');
+      return;
+    }
+    badge.className = 'smd-badge visible smd-badge-live';
+    badge.innerHTML = `<span class="smd-badge-label">${this._events.length} events today</span>`;
+
+    // Hide nav in live mode
+    if (this._dom.smdNav) this._dom.smdNav.style.display = 'none';
   }
 
   /** Navigate to prev/next event */

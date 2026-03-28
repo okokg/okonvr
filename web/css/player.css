@@ -960,9 +960,9 @@
   top: 0;
   left: 0;
   bottom: 0;
-  background: var(--warn);
+  background: #378ADD;
   border-radius: 6px;
-  opacity: 0.6;
+  opacity: 0.35;
   pointer-events: none;
 }
 
@@ -1629,8 +1629,8 @@
   top: 0;
   left: 0;
   bottom: 0;
-  background: var(--warn);
-  opacity: 0.7;
+  background: #378ADD;
+  opacity: 0.4;
   pointer-events: none;
 }
 
@@ -2062,7 +2062,7 @@
 /* Fullscreen LIVE: green seek bar always visible */
 .cam.fullscreen.fs-live .seek-date-nav { display: none; }
 
-/* LIVE: green fill instead of amber */
+/* LIVE: green fill instead of blue */
 .cam.fullscreen.fs-live .seek-fill { background: var(--accent); opacity: 0.3; }
 .cam.fullscreen.fs-live .seek-cursor { background: var(--accent); box-shadow: 0 0 6px rgba(0, 212, 170, 0.5); }
 .cam.fullscreen.fs-live .seek-now { display: none !important; }
@@ -2390,3 +2390,87 @@
 .ghud-smd-human { color: #ff8a8a; }
 .ghud-smd-vehicle { color: #ffc048; }
 
+
+/* ── SMD live mode ── */
+
+.smd-tooltip-hint {
+  color: #00d4aa;
+  font-size: 9px;
+  font-family: var(--mono);
+  display: block;
+  margin-top: 2px;
+}
+
+.smd-badge-live {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid #333;
+}
+.smd-badge-live .smd-badge-label { color: #888; }
+
+/* ── Watch Mode — motion detection ── */
+
+@keyframes watch-pulse {
+  0%, 100% { border-color: rgba(255, 71, 87, 0.9); }
+  50% { border-color: rgba(255, 71, 87, 0.4); }
+}
+
+.cam-motion {
+  border: 3px solid rgba(255, 71, 87, 0.9) !important;
+  animation: watch-pulse 1.5s ease infinite;
+}
+
+.cam-motion-cooldown {
+  border: 3px solid rgba(255, 71, 87, 0.3) !important;
+  animation: none;
+  transition: border-color 8s ease-out;
+}
+
+.watch-hidden { display: none !important; }
+
+/* Red dot in grid HUD */
+.watch-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #ff4757;
+  margin-left: 4px;
+  vertical-align: middle;
+}
+
+/* ── Watch Mode — motion detection ── */
+
+@keyframes watch-pulse {
+  0%, 100% { border-color: rgba(255, 71, 87, 0.9); }
+  50% { border-color: rgba(255, 71, 87, 0.4); }
+}
+
+.cam.watch-motion {
+  border: 3px solid rgba(255, 71, 87, 0.9) !important;
+  animation: watch-pulse 1.5s ease infinite;
+}
+
+.cam.watch-cooldown {
+  border: 3px solid rgba(255, 71, 87, 0.3) !important;
+  animation: none;
+  transition: border-color 10s ease-out;
+}
+
+.cam.watch-hidden { display: none !important; }
+
+/* HUD dot */
+.watch-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #ff4757;
+  margin-left: 4px;
+  vertical-align: middle;
+  flex-shrink: 0;
+}
+
+/* Grid filter mode — dynamic columns based on visible camera count */
+.grid.watch-filter-mode {
+  grid-template-columns: repeat(var(--watch-cols, 3), 1fr) !important;
+}

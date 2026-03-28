@@ -11,7 +11,7 @@
  */
 
 import { ApiClient, CameraGrid, CameraView, CamPlayer } from './oko-player/index.js';
-import { QualityFeature, PlaybackFeature, ZoomFeature, TalkbackFeature } from './oko-player/index.js';
+import { QualityFeature, PlaybackFeature, ZoomFeature, TalkbackFeature, WatchMode } from './oko-player/index.js';
 import { NotificationManager } from './notifications.js';
 import { SEARCH_DEBOUNCE_MS, VERSION } from './oko-player/config.js';
 
@@ -408,6 +408,9 @@ export class App {
       };
     }
 
+    // Watch mode: (re)create with new camera list
+    this._initWatchModeInstance();
+
     // delay to let go2rtc finish RTSP probes triggered by /api/streams
     await new Promise(r => setTimeout(r, 500));
 
@@ -761,6 +764,99 @@ export class App {
       // Recalculate auto grid after layout change
       setTimeout(() => { if (this.grid.autoFit) this.grid._applyAutoFit(); }, 50);
     });
+
+    // ── Watch mode ──
+    this._initWatchMode();
+  }
+
+  // ── Watch mode ──
+
+  _initWatchMode() {
+    this.watchMode = null;  // Created after cameras load
+    this._watchPopupOpen = false;
+
+    const btn = document.getElementById('watch-btn');
+    const popup = document.getElementById('watch-popup');
+    const badge = document.getElementById('watch-badge');
+    const slider = document.getElementById('watch-sensitivity');
+    const sliderVal = document.getElementById('watch-sensitivity-val');
+    const filterCb = document.getElementById('watch-filter');
+
+    if (!btn) return;
+
+    // Toggle watch mode on button click
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (!this.watchMode) return;
+
+      if (this.watchMode.isActive) {
+        this.watchMode.stop();
+        btn.classList.remove('active');
+        badge.classList.remove('visible');
+        badge.textContent = '';
+        popup.classList.remove('open');
+        this._watchPopupOpen = false;
+        this._showHint('Watch OFF');
+      } else {
+        this.watchMode.updateCameras(this.grid.cameras);
+        this.watchMode.gridElement = this.grid.gridEl;
+        this.watchMode.start();
+        btn.classList.add('active');
+        this._showHint('Watch ON');
+      }
+    });
+
+    // Dropdown arrow opens/closes settings popup
+    const cfgBtn = document.getElementById('watch-cfg-btn');
+    cfgBtn?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this._watchPopupOpen = !this._watchPopupOpen;
+      popup.classList.toggle('open', this._watchPopupOpen);
+    });
+
+    // Sensitivity slider
+    slider?.addEventListener('input', () => {
+      const val = parseInt(slider.value, 10);
+      if (sliderVal) sliderVal.textContent = val;
+      if (this.watchMode) this.watchMode.sensitivity = val;
+    });
+
+    // Motion-only filter
+    filterCb?.addEventListener('change', () => {
+      if (this.watchMode) this.watchMode.motionFilter = filterCb.checked;
+    });
+
+    // Prevent popup clicks from closing it
+    popup?.addEventListener('click', (e) => e.stopPropagation());
+
+    // Close popup on outside click
+    document.addEventListener('click', (e) => {
+      if (this._watchPopupOpen && !e.target.closest('.watch-wrap')) {
+        popup.classList.remove('open');
+        this._watchPopupOpen = false;
+      }
+    });
+  }
+
+  /** Called after grid.build() — create WatchMode instance with cameras. */
+  _initWatchModeInstance() {
+    if (this.watchMode) this.watchMode.destroy();
+
+    this.watchMode = new WatchMode(this.grid.cameras);
+    this.watchMode.gridElement = this.grid.gridEl;
+
+    // Update badge on motion changes
+    const badge = document.getElementById('watch-badge');
+    this.watchMode.onMotionUpdate = (count, ids) => {
+      if (!badge) return;
+      if (count > 0) {
+        badge.textContent = `${count} motion`;
+        badge.classList.add('visible');
+      } else {
+        badge.classList.remove('visible');
+        badge.textContent = '';
+      }
+    };
   }
 
   _buildGroupButtons(groups) {
@@ -966,6 +1062,12 @@ export class App {
       // T → toggle theme
       if (code === 'KeyT' && !e.ctrlKey && !e.metaKey) {
         document.getElementById('theme-btn').click();
+        return;
+      }
+
+      // W → toggle watch mode
+      if (code === 'KeyW' && !e.ctrlKey && !e.metaKey) {
+        document.getElementById('watch-btn')?.click();
         return;
       }
 
@@ -1555,6 +1657,7 @@ export class App {
         <div class="kbd-row"><kbd>R</kbd><span>Refresh all</span></div>
         <div class="kbd-row"><kbd>C</kbd><span>Compact mode</span></div>
         <div class="kbd-row"><kbd>T</kbd><span>Toggle theme</span></div>
+        <div class="kbd-row"><kbd>W</kbd><span>Watch mode (motion detect)</span></div>
         <div class="kbd-row"><kbd>F</kbd><span>Native fullscreen</span></div>
         <div class="kbd-row"><kbd>Esc</kbd><span>Back / exit</span></div>
         <div class="kbd-row"><kbd>Ctrl</kbd>+<kbd>1</kbd>-<kbd>6</kbd><span>Grid columns</span></div>

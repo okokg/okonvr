@@ -35,7 +35,8 @@ services:
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       - ./nginx/.htpasswd:/etc/nginx/.htpasswd
-      - ./web:/usr/share/nginx/html:ro
+      - ./web:/usr/share/nginx/html
+      - ./packages/oko-player/src:/usr/share/nginx/html/js/oko-player:ro
     depends_on:
       - backend
       - go2rtc

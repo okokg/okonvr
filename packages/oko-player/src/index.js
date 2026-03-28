@@ -40,3 +40,7 @@ export { ZoomFeature } from './features/zoom.js';
 export { TalkbackFeature } from './features/talkback.js';
 export { QualityFeature } from './features/quality.js';
 export { PlaybackFeature } from './features/playback.js';
+
+// Services
+export { WatchMode } from './services/watch-mode.js';
+export { MotionDetector } from './services/motion-detector.js';
