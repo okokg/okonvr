@@ -147,6 +147,26 @@ export class TalkbackFeature extends Feature {
       const sdp = await res.text();
       await pc.setRemoteDescription({ type: 'answer', sdp });
 
+      // Monitor ICE connection state — detect actual disconnection
+      pc.oniceconnectionstatechange = () => {
+        const state = pc.iceConnectionState;
+        console.log(`[talkback] ${view.id}: ICE state=${state}`);
+        if (state === 'failed' || state === 'closed') {
+          console.log(`[talkback] ${view.id}: ICE ${state} — auto-stopping`);
+          this.stop(true);
+        } else if (state === 'disconnected') {
+          // Grace period — Chrome sometimes recovers
+          this._iceDisconnectTimer = setTimeout(() => {
+            if (this._pc?.iceConnectionState === 'disconnected') {
+              console.log(`[talkback] ${view.id}: ICE disconnected for 5s — stopping`);
+              this.stop(true);
+            }
+          }, 5000);
+        } else if (state === 'connected' || state === 'completed') {
+          clearTimeout(this._iceDisconnectTimer);
+        }
+      };
+
       // Connected
       tb.connecting = false;
       tb.active = true;
@@ -171,33 +191,92 @@ export class TalkbackFeature extends Feature {
     const tb = this._view._state.talkback;
     if (tb.locked && !force) return;
     if (!tb.active && !tb.connecting && !this._pc) return;
-    console.log(`[talkback] ${this._view.id}: stopping`);
-    this._cleanup();
-    if (this._view.onTalkbackStop) this._view.onTalkbackStop(this._view);
-  }
 
-  // ── Internal ──
+    const streamName = this._stream;
+    console.log(`[talkback] ${this._view.id}: stopping (stream=${streamName})`);
 
-  _resetState() {
-    this._view._state.talkback.connecting = false;
-    this._render();
-  }
+    // 1. Close WebRTC + stop mic immediately (audio stops)
+    this._closePC();
 
-  _cleanup() {
+    // 2. Update UI to "stopping" visual feedback
     this._stopTimer();
+    tb.connecting = false;
+    tb.active = false;
+    tb.locked = false;
+    this._render();
+
+    // 3. Tell backend to delete go2rtc stream (async, fire-and-confirm)
+    if (this._view.onTalkbackStop) {
+      this._view.onTalkbackStop(this._view);
+    }
+
+    // 4. Verify stream was actually deleted after short delay
+    if (streamName) {
+      setTimeout(() => this._verifyStreamDeleted(streamName), 1500);
+    }
+
+    this._stream = null;
+  }
+
+  /** Close peer connection and stop all mic tracks. */
+  _closePC() {
+    clearTimeout(this._iceDisconnectTimer);
     if (this._pc) {
+      // Remove ICE handler to avoid re-triggering stop
+      this._pc.oniceconnectionstatechange = null;
       for (const sender of this._pc.getSenders()) {
         sender.track?.stop();
       }
       this._pc.close();
       this._pc = null;
     }
+  }
+
+  /** Check if go2rtc stream still exists and retry deletion if needed. */
+  async _verifyStreamDeleted(streamName) {
+    try {
+      const go2rtcApi = window.__okoConfig?.go2rtc_api || '/api';
+      const res = await fetch(`${go2rtcApi}/streams?src=${encodeURIComponent(streamName)}`);
+      if (res.ok) {
+        const info = await res.json();
+        const hasProducers = info.producers?.length > 0;
+        const hasConsumers = info.consumers?.length > 0;
+        if (hasProducers || hasConsumers) {
+          console.warn(`[talkback] ${this._view.id}: stream ${streamName} still active (p=${info.producers?.length} c=${info.consumers?.length}) — retrying delete`);
+          await fetch(`${go2rtcApi}/streams?src=${encodeURIComponent(streamName)}`, { method: 'DELETE' }).catch(() => {});
+          if (this._view.onTalkbackStop) this._view.onTalkbackStop(this._view);
+        } else {
+          console.log(`[talkback] ${this._view.id}: stream ${streamName} confirmed deleted`);
+        }
+      }
+    } catch {
+      // go2rtc unreachable — stream is likely gone
+    }
+  }
+
+  // ── Internal ──
+
+  /** Reset connecting state without full cleanup (early return in start()). */
+  _resetState() {
+    this._view._state.talkback.connecting = false;
+    this._render();
+  }
+
+  /** Full cleanup — used by onDisable() and error paths. */
+  _cleanup() {
+    this._stopTimer();
+    this._closePC();
+    const streamName = this._stream;
     this._stream = null;
     const tb = this._view._state.talkback;
     tb.connecting = false;
     tb.active = false;
     tb.locked = false;
     this._render();
+    // Best-effort backend cleanup
+    if (streamName && this._view.onTalkbackStop) {
+      this._view.onTalkbackStop(this._view);
+    }
   }
 
   _startTimer() {

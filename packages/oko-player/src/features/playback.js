@@ -8,6 +8,7 @@
 
 import { Feature } from '../core/feature.js';
 import { CamPlayer } from '../core/camera-player.js';
+import { SeekThumbnail } from './seek-thumbnail.js';
 import { pad, hms, hm, dm, dmy, fmtInput, fmtFull, daySeconds } from '../core/utils.js';
 
 export class PlaybackFeature extends Feature {
@@ -24,7 +25,10 @@ export class PlaybackFeature extends Feature {
     this._seekCursorFraction = undefined;
     this._seekNowFraction = 0;
     this._panelWasOpen = false;
-    this._thumbXHR = null;
+    this._seekThumbnail = null;
+    this._events = [];        // Smart motion events [{start, end, type}]
+    this._eventsDate = null;  // Date string of cached events
+    this._activeEventIdx = -1; // Index of event at current playback position
 
     this._injectDOM();
     this._cacheDom();
@@ -126,26 +130,29 @@ export class PlaybackFeature extends Feature {
   }
 
   togglePanel() {
-    this._dom.playbackBtn?.click();
+    const d = this._dom;
+    if (!d.playbackPanel) return;
+    d.playbackPanel.classList.toggle('open');
+    d.playbackBtn?.classList.toggle('active', d.playbackPanel.classList.contains('open'));
   }
 
   /**
    * Start archive playback.
    */
   start(streamName, startTime, endTime, forceMSE = false, resolution = 'original') {
+    // Debounce: ignore rapid repeated calls
+    if (this._startDebounce) return;
+    this._startDebounce = true;
+    setTimeout(() => { this._startDebounce = false; }, 1000);
+
     const view = this._view;
     this.stopTimer();
     this._clearPendingChange();
 
     // Stop talkback if active
-    const talkback = view.getFeature?.(/* TalkbackFeature */ null);
-    // Generalized: let features handle
     for (const f of view._features) {
-      if (f !== this && f.onDisable) {
-        // Only stop talkback specifically
-        if (f.constructor.name === 'TalkbackFeature' && f.isActive) {
-          f.stop(true);
-        }
+      if (f.constructor.name === 'TalkbackFeature' && f.isActive) {
+        f.stop(true);
       }
     }
 
@@ -165,6 +172,7 @@ export class PlaybackFeature extends Feature {
     this._offset = (startTime - this._date) / 1000;
     this._startWall = new Date();
     this._updateDateLabel();
+    this._fetchEvents(); // Load smart events for timeline
 
     view._showLoading('loading archive');
     this._player = new CamPlayer(view.video, streamName, { preferH265: forceMSE });
@@ -226,6 +234,33 @@ export class PlaybackFeature extends Feature {
     view.el.classList.remove('playback-mode');
     this._dom.seekTimeline?.classList.remove('active');
 
+    // Reset inline display styles set by _updateSeekAvailability()
+    // CSS !important should handle this, but belt-and-suspenders
+    if (this._dom.seekUnavailable) this._dom.seekUnavailable.style.display = '';
+    if (this._dom.seekNow) this._dom.seekNow.style.display = '';
+    if (this._dom.ghudUnavailable) this._dom.ghudUnavailable.style.display = '';
+    if (this._dom.ghudNow) this._dom.ghudNow.style.display = '';
+
+    // Clear smart event markers
+    if (this._dom.seekEvents) this._dom.seekEvents.innerHTML = '';
+    if (this._dom.ghudEvents) this._dom.ghudEvents.innerHTML = '';
+    this._events = [];
+    this._eventsDate = null;
+    this._activeEventIdx = -1;
+
+    // Clear SMD UI
+    if (this._dom.smdBadge) { this._dom.smdBadge.innerHTML = ''; this._dom.smdBadge.classList.remove('visible'); }
+    if (this._dom.smdNav) this._dom.smdNav.style.display = 'none';
+    if (this._dom.smdTooltip) this._dom.smdTooltip.classList.remove('visible');
+    const ghudSmd = this._view._dom.ghudInfo?.querySelector('.ghud-smd');
+    if (ghudSmd) ghudSmd.remove();
+
+    // Reset seek cursor positions
+    if (this._dom.seekFill) this._dom.seekFill.style.width = '';
+    if (this._dom.seekCursor) this._dom.seekCursor.style.left = '';
+    if (this._dom.seekCursorLine) this._dom.seekCursorLine.style.left = '';
+    if (this._dom.seekCursorTime) { this._dom.seekCursorTime.style.left = ''; this._dom.seekCursorTime.textContent = ''; }
+
     if (view.isFullscreen) {
       view.el.classList.add('fs-live');
       if (this._dom.seekInfoRecText) this._dom.seekInfoRecText.textContent = 'LIVE';
@@ -254,6 +289,32 @@ export class PlaybackFeature extends Feature {
     if (this._player) { this._player.disable(); this._player = null; }
     this._stream = null;
     this._view._playbackStream = null;
+  }
+
+  // ── Grid HUD bar hover (called by core) ──
+
+  onGhudBarHover(hours, minutes, fraction, ghudTooltip) {
+    let isUnavailable = false;
+    if (this._date) {
+      const hoverDate = new Date(this._date);
+      hoverDate.setHours(hours, minutes, 0, 0);
+      isUnavailable = this._isUnavailable(hoverDate);
+    } else {
+      const now = new Date();
+      const hoverDate = new Date(now);
+      hoverDate.setHours(hours, minutes, 0, 0);
+      isUnavailable = hoverDate > now;
+    }
+    if (isUnavailable) {
+      ghudTooltip.textContent = '▶ LIVE';
+      ghudTooltip.classList.add('visible', 'live');
+      ghudTooltip.classList.remove('unavailable');
+    } else {
+      ghudTooltip.textContent = `${pad(hours)}:${pad(minutes)}`;
+      ghudTooltip.classList.add('visible');
+      ghudTooltip.classList.remove('unavailable', 'live');
+    }
+    ghudTooltip.style.left = `${fraction * 100}%`;
   }
 
   // ── Timeline click handler (called by core) ──
@@ -321,6 +382,9 @@ export class PlaybackFeature extends Feature {
     if (ghudFill) ghudFill.style.width = pct;
     if (ghudCursor) ghudCursor.style.left = pct;
     if (ghudTime) ghudTime.textContent = timeStr;
+
+    // Smart event tracking
+    this._updateActiveEvent();
   }
 
   _updateDateLabel() {
@@ -476,6 +540,8 @@ export class PlaybackFeature extends Feature {
         <span class="seek-info-status"><span class="seek-info-rec-dot"><span class="seek-info-rec-inner"></span></span><span class="seek-info-rec-text">REC</span></span>
         <button class="seek-info-time-btn" title="Open archive panel (P)"><span class="seek-info-time"></span><span class="seek-info-time-arrow">▾</span></button>
         <span class="seek-info-date-full"></span>
+        <span class="smd-badge"></span>
+        <div class="smd-nav"><button class="smd-nav-prev" title="Previous event (Shift+E)">◂</button><span class="smd-nav-pos">—</span><button class="smd-nav-next" title="Next event (E)">▸</button></div>
         <span class="seek-info-spacer"></span>
         <div class="seek-info-seek-btns">
           <button class="fs-seek-btn" data-offset="-3600">-1h</button><button class="fs-seek-btn" data-offset="-900">-15m</button><button class="fs-seek-btn" data-offset="-300">-5m</button><button class="fs-seek-btn" data-offset="-60">-1m</button>
@@ -490,6 +556,7 @@ export class PlaybackFeature extends Feature {
           <div class="seek-ticks"><span></span><span></span><span></span><span></span><span></span><span></span></div>
           <div class="seek-fill"></div><div class="seek-cursor"></div><div class="seek-cursor-line"></div><div class="seek-cursor-time"></div><div class="seek-cursor-detail"></div>
           <div class="seek-unavailable"></div><div class="seek-now"><span class="seek-now-label"></span></div>
+          <div class="seek-events"></div>
         </div>
         <div class="seek-labels"><span>00:00</span><span>04:00</span><span>08:00</span><span>12:00</span><span>16:00</span><span>20:00</span><span>24:00</span></div>
         <div class="seek-time-tooltip"></div>
@@ -497,35 +564,35 @@ export class PlaybackFeature extends Feature {
         <div class="seek-thumbnail"><div class="seek-thumb-progress"></div><img alt=""><div class="seek-thumb-spinner"><div></div></div><div class="seek-thumb-time"></div></div>
         <div class="seek-thumb-marker"></div>
         <div class="seek-live-pill">▶ LIVE</div>
+        <div class="smd-tooltip"></div>
       </div>
     `;
     const camTimeline = el.querySelector('.cam-timeline');
     if (camTimeline) el.insertBefore(timeline, camTimeline);
 
-    // Grid HUD LIVE button
+    // Grid HUD: spacer + day nav — insert AFTER ghud-status, BEFORE quality badge
     const ghudInfo = el.querySelector('.ghud-info');
-    if (ghudInfo) {
-      // Spacer, day nav, date — inject into ghud-info
+    const ghudStatus = el.querySelector('.ghud-status');
+    if (ghudInfo && ghudStatus) {
       const spacer = document.createElement('span');
       spacer.className = 'ghud-spacer';
-      ghudInfo.appendChild(spacer);
 
       const prevBtn = document.createElement('button');
       prevBtn.className = 'ghud-day-prev';
       prevBtn.textContent = '◂';
-      ghudInfo.appendChild(prevBtn);
 
       const dateEl = document.createElement('span');
       dateEl.className = 'ghud-date';
-      ghudInfo.appendChild(dateEl);
 
       const nextBtn = document.createElement('button');
       nextBtn.className = 'ghud-day-next';
       nextBtn.textContent = '▸';
-      ghudInfo.appendChild(nextBtn);
+
+      // Insert all after ghud-status — keeps quality badge (if any) at end
+      ghudStatus.after(spacer, prevBtn, dateEl, nextBtn);
     }
 
-    // Grid HUD: unavailable + now marker in ghud-bar
+    // Grid HUD: unavailable + now marker + events in ghud-bar
     const ghudBar = this._view._dom.ghudBar;
     if (ghudBar) {
       const unavail = document.createElement('div');
@@ -534,6 +601,9 @@ export class PlaybackFeature extends Feature {
       const nowEl = document.createElement('div');
       nowEl.className = 'ghud-now';
       ghudBar.appendChild(nowEl);
+      const eventsEl = document.createElement('div');
+      eventsEl.className = 'ghud-events';
+      ghudBar.appendChild(eventsEl);
     }
 
     // LIVE button (before grid HUD)
@@ -592,6 +662,14 @@ export class PlaybackFeature extends Feature {
       ghudDayNext:     el.querySelector('.ghud-day-next'),
       ghudUnavailable: el.querySelector('.ghud-unavailable'),
       ghudNow:         el.querySelector('.ghud-now'),
+      seekEvents:      el.querySelector('.seek-events'),
+      ghudEvents:      el.querySelector('.ghud-events'),
+      smdBadge:        el.querySelector('.smd-badge'),
+      smdNav:          el.querySelector('.smd-nav'),
+      smdNavPos:       el.querySelector('.smd-nav-pos'),
+      smdNavPrev:      el.querySelector('.smd-nav-prev'),
+      smdNavNext:      el.querySelector('.smd-nav-next'),
+      smdTooltip:      el.querySelector('.smd-tooltip'),
     };
   }
 
@@ -684,6 +762,10 @@ export class PlaybackFeature extends Feature {
     d.ghudDayPrev?.addEventListener('click', (e) => { e.stopPropagation(); this._changeDay(-1); });
     d.ghudDayNext?.addEventListener('click', (e) => { e.stopPropagation(); this._changeDay(+1); });
 
+    // SMD event navigation
+    d.smdNavPrev?.addEventListener('click', (e) => { e.stopPropagation(); this._navigateEvent(-1); });
+    d.smdNavNext?.addEventListener('click', (e) => { e.stopPropagation(); this._navigateEvent(+1); });
+
     // LIVE button (grid HUD) — long-press to go live
     this._bindLiveButton();
 
@@ -727,12 +809,268 @@ export class PlaybackFeature extends Feature {
     }
   }
 
+  // ── Smart events on timeline ──
+
+  async _fetchEvents() {
+    if (!this._date) return;
+    const id = this._view.id;
+    const y = this._date.getFullYear();
+    const m = String(this._date.getMonth() + 1).padStart(2, '0');
+    const d = String(this._date.getDate()).padStart(2, '0');
+    const dateStr = `${y}-${m}-${d}`;
+
+    if (this._eventsDate === dateStr) return;
+
+    try {
+      const res = await fetch(`/backend/events/${id}?date=${dateStr}`);
+      if (!res.ok) { this._events = []; this._eventsDate = dateStr; this._renderEvents(); return; }
+      const data = await res.json();
+      this._events = data.events || [];
+      this._eventsDate = dateStr;
+      this._activeEventIdx = -1;
+      this._renderEvents();
+      this._updateActiveEvent();
+    } catch {
+      this._events = [];
+      this._eventsDate = dateStr;
+      this._renderEvents();
+    }
+  }
+
+  _renderEvents() {
+    const tooltip = this._dom.smdTooltip;
+
+    for (const container of [this._dom.seekEvents, this._dom.ghudEvents]) {
+      if (!container) continue;
+      container.innerHTML = '';
+      const isGhud = container.classList.contains('ghud-events');
+
+      for (let i = 0; i < this._events.length; i++) {
+        const ev = this._events[i];
+        const left = (ev.start / 86400) * 100;
+        const width = Math.max(((ev.end - ev.start) / 86400) * 100, isGhud ? 0.25 : 0.15);
+        const marker = document.createElement('div');
+        marker.className = `smd-marker smd-${ev.type}`;
+        marker.dataset.idx = String(i);
+        marker.style.left = `${left}%`;
+        marker.style.width = `${width}%`;
+
+        // Click → seek to event start
+        marker.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const sec = ev.start;
+          const baseDate = this._date || new Date();
+          const seekDate = new Date(baseDate);
+          seekDate.setHours(0, 0, 0, 0);
+          seekDate.setSeconds(sec);
+          const view = this._view;
+          if (this.isActive && view.onPlaybackSeek) {
+            view.onPlaybackSeek(view, seekDate);
+          }
+        });
+
+        // Hover tooltip (fullscreen seek-bar only)
+        if (!isGhud && tooltip) {
+          marker.addEventListener('mouseenter', (e) => {
+            const label = ev.type === 'human' ? 'Human' : 'Vehicle';
+            const color = ev.type === 'human' ? 'var(--danger)' : 'var(--warn)';
+            tooltip.innerHTML = `<span class="smd-tooltip-dot" style="background:${color}"></span><span class="smd-tooltip-type">${label}</span><span class="smd-tooltip-time">${this._fmtSec(ev.start)} — ${this._fmtSec(ev.end)}</span>`;
+            tooltip.classList.add('visible');
+            const barRect = this._dom.seekBar?.getBoundingClientRect();
+            const markerRect = marker.getBoundingClientRect();
+            if (barRect) {
+              const cx = markerRect.left + markerRect.width / 2 - barRect.left;
+              tooltip.style.left = `${cx}px`;
+            }
+          });
+          marker.addEventListener('mouseleave', () => {
+            tooltip.classList.remove('visible');
+          });
+        }
+
+        container.appendChild(marker);
+      }
+    }
+
+    // Update nav visibility
+    this._updateEventNav();
+    this._updateGhudEventBadge();
+  }
+
+  /** Called from _updatePosition — check if playback is inside an event */
+  _updateActiveEvent() {
+    if (!this._events.length) {
+      if (this._activeEventIdx !== -1) {
+        this._activeEventIdx = -1;
+        this._clearActiveMarker();
+        this._updateEventBadge();
+        this._updateEventNav();
+        this._updateGhudEventBadge();
+      }
+      return;
+    }
+
+    const pos = this.position;
+    if (!pos) return;
+    const sec = daySeconds(pos);
+    let found = -1;
+
+    for (let i = 0; i < this._events.length; i++) {
+      if (sec >= this._events[i].start && sec <= this._events[i].end) {
+        found = i;
+        break;
+      }
+    }
+
+    if (found !== this._activeEventIdx) {
+      this._activeEventIdx = found;
+      this._highlightActiveMarker(found);
+      this._updateEventBadge();
+      this._updateEventNav();
+      this._updateGhudEventBadge();
+    }
+  }
+
+  _highlightActiveMarker(idx) {
+    for (const container of [this._dom.seekEvents, this._dom.ghudEvents]) {
+      if (!container) continue;
+      container.querySelectorAll('.smd-marker').forEach((m, i) => {
+        m.classList.toggle('smd-active', i === idx);
+      });
+    }
+  }
+
+  _clearActiveMarker() {
+    for (const container of [this._dom.seekEvents, this._dom.ghudEvents]) {
+      if (!container) continue;
+      container.querySelectorAll('.smd-active').forEach(m => m.classList.remove('smd-active'));
+    }
+  }
+
+  /** Update the event badge in fullscreen info row */
+  _updateEventBadge() {
+    const badge = this._dom.smdBadge;
+    if (!badge) return;
+    const idx = this._activeEventIdx;
+    if (idx < 0 || !this._events[idx]) {
+      badge.innerHTML = '';
+      badge.classList.remove('visible');
+      return;
+    }
+    const ev = this._events[idx];
+    const label = ev.type === 'human' ? 'Human' : 'Vehicle';
+    const cls = ev.type === 'human' ? 'smd-badge-human' : 'smd-badge-vehicle';
+    badge.className = `smd-badge visible ${cls}`;
+    badge.innerHTML = `<span class="smd-badge-dot"></span><span class="smd-badge-label">${label} · ${this._fmtSec(ev.start)} — ${this._fmtSec(ev.end)}</span>`;
+  }
+
+  /** Update the event navigator counter */
+  _updateEventNav() {
+    const nav = this._dom.smdNav;
+    const pos = this._dom.smdNavPos;
+    if (!nav || !pos) return;
+    if (!this._events.length) {
+      nav.style.display = 'none';
+      return;
+    }
+    nav.style.display = '';
+    const idx = this._activeEventIdx;
+    pos.textContent = idx >= 0 ? `${idx + 1} / ${this._events.length}` : `— / ${this._events.length}`;
+    pos.className = `smd-nav-pos${idx >= 0 ? ' smd-nav-active' : ''}`;
+  }
+
+  /** Update compact event indicator in grid HUD */
+  _updateGhudEventBadge() {
+    const ghudInfo = this._view._dom.ghudInfo;
+    if (!ghudInfo) return;
+    let badge = ghudInfo.querySelector('.ghud-smd');
+    const idx = this._activeEventIdx;
+
+    if (!this._events.length) {
+      if (badge) badge.remove();
+      return;
+    }
+
+    if (!badge) {
+      badge = document.createElement('span');
+      badge.className = 'ghud-smd';
+      ghudInfo.appendChild(badge);
+    }
+
+    if (idx >= 0 && this._events[idx]) {
+      const ev = this._events[idx];
+      const icon = ev.type === 'human' ? '🚶' : '🚗';
+      const cls = ev.type === 'human' ? 'ghud-smd-human' : 'ghud-smd-vehicle';
+      badge.className = `ghud-smd ${cls}`;
+      badge.textContent = `${icon} ${idx + 1}/${this._events.length}`;
+    } else {
+      badge.className = 'ghud-smd';
+      badge.textContent = `${this._events.length} ev`;
+    }
+  }
+
+  /** Navigate to prev/next event */
+  _navigateEvent(direction) {
+    if (!this._events.length || !this._view.onPlaybackSeek) return;
+    const current = this._activeEventIdx;
+    let target;
+
+    if (direction > 0) {
+      // Next: if inside event, go to next one; if between, go to nearest after position
+      if (current >= 0 && current < this._events.length - 1) {
+        target = current + 1;
+      } else if (current < 0) {
+        const pos = this.position;
+        const sec = pos ? daySeconds(pos) : 0;
+        target = this._events.findIndex(ev => ev.start > sec);
+        if (target < 0) return; // no events ahead
+      } else return; // last event
+    } else {
+      // Prev: if inside event, go to previous; if between, go to nearest before position
+      if (current > 0) {
+        target = current - 1;
+      } else if (current < 0) {
+        const pos = this.position;
+        const sec = pos ? daySeconds(pos) : 0;
+        for (let i = this._events.length - 1; i >= 0; i--) {
+          if (this._events[i].end < sec) { target = i; break; }
+        }
+        if (target === undefined) return; // no events behind
+      } else return; // first event
+    }
+
+    if (target === undefined || !this._events[target]) return;
+    const ev = this._events[target];
+    const seekDate = new Date(this._date);
+    seekDate.setHours(0, 0, 0, 0);
+    seekDate.setSeconds(ev.start);
+    this._view.onPlaybackSeek(this._view, seekDate);
+  }
+
+  /** Handle keyboard shortcuts for event navigation */
+  handleEventKey(key, shiftKey) {
+    if (!this.isActive || !this._events.length) return false;
+    if (key === 'e' || key === 'E') {
+      this._navigateEvent(shiftKey ? -1 : 1);
+      return true;
+    }
+    return false;
+  }
+
+  _fmtSec(sec) {
+    const h = String(Math.floor(sec / 3600)).padStart(2, '0');
+    const m = String(Math.floor((sec % 3600) / 60)).padStart(2, '0');
+    const s = String(Math.floor(sec % 60)).padStart(2, '0');
+    return `${h}:${m}:${s}`;
+  }
+
   _changeDay(direction) {
     const view = this._view;
     if (!this._date || !view.onPlaybackSeek) return;
     const target = new Date(this._date.getTime() + direction * 86400000);
     target.setHours(0, 0, 0, 0);
     if (direction > 0 && target > new Date()) return;
+    this._eventsDate = null; // force refetch for new day
     const pos = this.position;
     const timeOfDay = pos ? daySeconds(pos) : 0;
     let seekTime = new Date(target.getTime() + timeOfDay * 1000);
@@ -746,6 +1084,34 @@ export class PlaybackFeature extends Feature {
     if (!seekBar) return;
     const view = this._view;
 
+    // Thumbnail preview — delegated to SeekThumbnail
+    this._seekThumbnail = new SeekThumbnail({
+      seekBar,
+      dom: {
+        seekThumbDot: d.seekThumbDot,
+        seekRingFill: d.seekRingFill,
+        seekThumbnail: d.seekThumbnail,
+        seekThumbImg: d.seekThumbImg,
+        seekThumbTime: d.seekThumbTime,
+        seekThumbProgress: d.seekThumbProgress,
+        seekThumbSpinner: d.seekThumbSpinner,
+        seekThumbMarker: d.seekThumbMarker,
+      },
+      cameraId: view.id,
+      getBaseDate: () => this._date || (() => { const dt = new Date(); dt.setHours(0,0,0,0); return dt; })(),
+      onSeek: (hours, minutes) => {
+        const baseDate = this._date || (() => { const dt = new Date(); dt.setHours(0,0,0,0); return dt; })();
+        const seekDate = new Date(baseDate);
+        seekDate.setHours(hours, minutes, 0, 0);
+        if (this.isActive && view.onPlaybackSeek) {
+          view.onPlaybackSeek(view, seekDate);
+        } else if (view.onPlaybackRequest) {
+          const endOfDay = new Date(seekDate); endOfDay.setHours(23, 59, 59, 0);
+          view.onPlaybackRequest(view, fmtFull(seekDate), fmtFull(endOfDay), 'original');
+        }
+      },
+    });
+
     const getTime = (e) => {
       const rect = seekBar.getBoundingClientRect();
       const fraction = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
@@ -757,10 +1123,34 @@ export class PlaybackFeature extends Feature {
       e.stopPropagation();
       const { fraction, hours, minutes } = getTime(e);
       const timeText = `${pad(hours)}:${pad(minutes)}`;
+      const full = view.isFullscreen;
 
-      // Check unavailable
+      const cursorDist = Math.abs(fraction - (this._seekCursorFraction || -1));
+
+      // Fullscreen: show cursor-detail when hovering near cursor (archive only)
+      if (full && d.seekCursorDetail && !view.el.classList.contains('fs-live')) {
+        if (cursorDist < 0.03 && this._seekCursorFraction !== undefined) {
+          const pos = this.position;
+          if (pos) {
+            const ct = hm(pos);
+            const now = new Date();
+            const diffMs = now - pos;
+            const diffMin = Math.floor(Math.abs(diffMs) / 60000);
+            const dH = Math.floor(diffMin / 60);
+            const dM = diffMin % 60;
+            const delta = dH > 0 ? `-${dH}h${pad(dM)}m` : `-${dM}m`;
+            d.seekCursorDetail.innerHTML = `<span class="scd-time">${ct}</span><span class="scd-delta">${delta}</span>`;
+          }
+          d.seekCursorDetail.style.left = `${(this._seekCursorFraction) * 100}%`;
+          d.seekCursorDetail.classList.add('visible');
+        } else {
+          d.seekCursorDetail.classList.remove('visible');
+        }
+      }
+
+      // Check unavailable zone
       let isUnavail = false;
-      const baseDate = this._date || (() => { const d = new Date(); d.setHours(0,0,0,0); return d; })();
+      const baseDate = this._date || (() => { const dt = new Date(); dt.setHours(0,0,0,0); return dt; })();
       const hoverDate = new Date(baseDate);
       hoverDate.setHours(hours, minutes, 0, 0);
       if (this._date) isUnavail = this._isUnavailable(hoverDate);
@@ -769,21 +1159,25 @@ export class PlaybackFeature extends Feature {
       if (isUnavail) {
         d.seekTooltip?.classList.remove('visible');
         if (d.seekLivePill) { d.seekLivePill.style.left = `${fraction * 100}%`; d.seekLivePill.classList.add('visible'); }
-        return;
+      } else {
+        d.seekLivePill?.classList.remove('visible');
+        if (d.seekTooltip) {
+          d.seekTooltip.textContent = timeText;
+          d.seekTooltip.classList.remove('unavailable');
+          d.seekTooltip.style.left = `${fraction * 100}%`;
+          d.seekTooltip.classList.add('visible');
+        }
       }
-      d.seekLivePill?.classList.remove('visible');
-      if (d.seekTooltip) {
-        d.seekTooltip.textContent = timeText;
-        d.seekTooltip.style.left = `${fraction * 100}%`;
-        d.seekTooltip.classList.add('visible');
-        d.seekTooltip.classList.remove('unavailable');
-      }
+
+      // Delegate thumbnail
+      this._seekThumbnail?.update(fraction, hours, minutes, isUnavail);
     });
 
-    seekBar.addEventListener('mouseleave', () => {
+    seekBar.addEventListener('mouseleave', (e) => {
       d.seekTooltip?.classList.remove('visible');
       d.seekLivePill?.classList.remove('visible');
-      d.seekCursorDetail?.classList.remove('visible');
+      if (d.seekCursorDetail) d.seekCursorDetail.classList.remove('visible');
+      this._seekThumbnail?.dismiss(e);
     });
 
     seekBar.addEventListener('click', (e) => {
@@ -792,7 +1186,6 @@ export class PlaybackFeature extends Feature {
       this.onTimelineClick(hours, minutes);
     });
   }
-
   _bindLiveButton() {
     const btn = this._dom.ghudLiveBtn;
     if (!btn) return;
@@ -831,7 +1224,7 @@ export class PlaybackFeature extends Feature {
   destroy() {
     this.stopTimer();
     clearInterval(this._nowMarkerTimer);
-    if (this._thumbXHR) { this._thumbXHR.abort(); this._thumbXHR = null; }
+    if (this._seekThumbnail) { this._seekThumbnail.destroy(); this._seekThumbnail = null; }
     this._dom.playbackPanel?.remove();
     this._dom.seekTimeline?.remove();
     this._dom.playbackBtn?.remove();

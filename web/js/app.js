@@ -584,17 +584,6 @@ export class App {
       await this.api.stopTalkback(cam.id).catch(() => {});
     };
 
-    this.grid.onNeedTranscode = async (cam) => {
-      try {
-        console.log(`[app] ${cam.id}: requesting H.265→H.264 transcode`);
-        const result = await this.api.createTranscodeStream(cam.id);
-        cam.switchToStream(result.stream);
-        this._showHint(`${cam.id} → transcoding H.264`);
-      } catch (err) {
-        console.error(`[app] Transcode failed for ${cam.id}:`, err);
-      }
-    };
-
     // Track connection errors per NVR group → frontend circuit breaker
     // Sliding window: store timestamps of each error, check multiple tiers
     this._groupErrorLog = {}; // { groupName: [timestamp, timestamp, ...] }
@@ -1579,7 +1568,7 @@ export class App {
 
   /** Cleanup all playback streams on page unload. */
   _bindPageUnload() {
-    // Clean up HD/playback/transcode streams on tab close
+    // Clean up HD/playback streams on tab close
     const cleanup = () => navigator.sendBeacon?.('/backend/cleanup-session', '');
 
     window.addEventListener('beforeunload', cleanup);

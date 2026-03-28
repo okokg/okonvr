@@ -40,6 +40,10 @@ export class CameraGrid {
     // fullscreen state
     this._fullscreenCamera = null;
 
+    // Sequential start queue
+    this._startQueue = [];
+    this._startRunning = false;
+
     // keyboard focus state
     this._focusedIndex = -1;
 
@@ -243,11 +247,25 @@ export class CameraGrid {
   /**
    * Start cameras one by one, waiting for each to connect (or timeout)
    * before starting the next. Prevents NVR overload.
+   * Cameras can be bumped to front via prioritize().
    */
   async _startSequential(camsToStart) {
+    // Merge into pending queue (don't replace — another batch might be running)
     for (const cam of camsToStart) {
+      if (!this._startQueue.includes(cam)) this._startQueue.push(cam);
+    }
+
+    // Only one loop runs at a time
+    if (this._startRunning) return;
+    this._startRunning = true;
+
+    while (this._startQueue.length > 0) {
+      const cam = this._startQueue.shift();
+      // Skip if already started (e.g. via prioritize) or disabled
+      if (cam.isEnabled && cam.isConnected) continue;
+      if (!cam.el.offsetParent) continue; // hidden by filter
+
       cam.start();
-      // wait until connected or stagger delay, whichever comes first
       await new Promise(resolve => {
         const staggerMs = window.__okoConfig?.stagger_ms || STAGGER_MS;
         const timer = setTimeout(resolve, staggerMs);
@@ -259,6 +277,24 @@ export class CameraGrid {
           }
         }, 50);
       });
+    }
+
+    this._startRunning = false;
+  }
+
+  /**
+   * Immediately start a camera, bypassing the sequential queue.
+   * Used when user opens fullscreen — they shouldn't wait for 30 other cameras.
+   */
+  prioritize(cam) {
+    // Remove from queue so _startSequential skips it
+    const idx = this._startQueue.indexOf(cam);
+    if (idx >= 0) this._startQueue.splice(idx, 1);
+
+    // Start immediately if not already running
+    if (!cam.isEnabled || !cam.isConnected) {
+      console.log(`[grid] ${cam.id}: priority start (was #${idx >= 0 ? idx + 1 : '—'} in queue)`);
+      cam.start();
     }
   }
 
@@ -316,6 +352,7 @@ export class CameraGrid {
       prev.exitFullscreen();
       if (this.onFullscreenExit) this.onFullscreenExit(prev);
     }
+    this.prioritize(cam);
     cam.enterFullscreen();
     this._fullscreenCamera = cam;
     this.clearFocus();
@@ -342,9 +379,8 @@ export class CameraGrid {
     if (!next) return;
 
     const prev = this._fullscreenCamera;
-    // Keep prev camera's zoom state (hidden but preserved)
     prev.exitFullscreen({ keepZoom: true });
-    // Next camera enters with its own saved zoom (restored in enterFullscreen)
+    this.prioritize(next);
     next.enterFullscreen();
     this._fullscreenCamera = next;
     this._syncHash();

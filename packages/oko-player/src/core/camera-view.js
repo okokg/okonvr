@@ -49,6 +49,7 @@ export class CameraView {
       ghudTime:       el.querySelector('.ghud-time'),
       ghudTooltip:    el.querySelector('.ghud-tooltip'),
       ghudRecLabel:   el.querySelector('.ghud-rec-label'),
+      ghudInfo:       el.querySelector('.ghud-info'),
       infoInline:     el.querySelector('.cam-info-inline'),
       infoTooltip:    el.querySelector('.cam-info-tooltip'),
       loading:        el.querySelector('.cam-loading'),
@@ -69,7 +70,6 @@ export class CameraView {
       };
       this._dom.snapshot.onerror = () => {
         console.warn(`[snapshot] ${this.id}: failed to load`);
-        this._dom.snapshot.style.display = 'none';
       };
     }
 
@@ -187,6 +187,13 @@ export class CameraView {
     for (const f of this._features) f.onDisable();
     this._switchPlayer(null);
     this._stopRenderCheck();
+
+    // Show snapshot immediately so video area is never black
+    const snap = this._dom.snapshot;
+    if (snap && !this.isPlayback) {
+      snap.classList.remove('loaded');
+      snap.style.display = '';
+    }
   }
 
   get isConnected() {
@@ -416,15 +423,21 @@ export class CameraView {
     this._dom.loadingText.textContent = text;
     this._dom.loading.style.display = 'flex';
 
-    if (this._dom.snapshot && this._dom.snapshot.classList.contains('loaded') && !this.isPlayback) {
-      this._dom.snapshot.classList.remove('loaded');
-      this._dom.snapshot.style.display = '';
-      this._dom.snapshot.src = `/backend/snapshot/${this.id}?t=${Date.now()}`;
+    // Show snapshot as dimmed background during loading
+    const snap = this._dom.snapshot;
+    if (snap && !this.isPlayback) {
+      snap.classList.remove('loaded');
+      snap.style.display = '';
+      // Re-fetch only if we don't have a good image already
+      if (!snap.naturalWidth) {
+        snap.src = `/backend/snapshot/${this.id}?t=${Date.now()}`;
+      }
     }
+
+    const t = (text || '').toLowerCase();
 
     const dots = this._dom.loadingDots;
     if (dots) {
-      const t = (text || '').toLowerCase();
       let stage = 1;
       if (t.includes('buffer') || t.includes('keyframe') || t.includes('waiting')) stage = 2;
       if (t.includes('codec') && !t.includes('fallback')) stage = 2;
@@ -433,8 +446,11 @@ export class CameraView {
       spans.forEach((s, i) => s.classList.toggle('active', i < stage));
     }
 
+    // Don't auto-detect frames for stages where video is known to be stale/frozen
+    const isStale = t.includes('recover') || t.includes('reconnect');
     const activePlayer = this._activePlayer || this.player;
-    if (activePlayer.enabled) this._startRenderCheck();
+    if (activePlayer.enabled && !isStale) this._startRenderCheck();
+    else this._stopRenderCheck();
   }
 
   _hideLoading() {
@@ -922,9 +938,39 @@ export class CameraView {
       const totalSeconds = fraction * 24 * 3600;
       const hours = Math.floor(totalSeconds / 3600);
       const minutes = Math.floor((totalSeconds % 3600) / 60);
-      ghudTooltip.textContent = `${pad(hours)}:${pad(minutes)}`;
-      ghudTooltip.style.left = `${fraction * 100}%`;
-      ghudTooltip.classList.add('visible');
+      const timeText = `${pad(hours)}:${pad(minutes)}`;
+
+      // Delegate to features (playback checks unavailable zones)
+      let handled = false;
+      for (const f of this._features) {
+        if (f.onGhudBarHover) {
+          try {
+            f.onGhudBarHover(hours, minutes, fraction, ghudTooltip);
+            handled = true;
+          } catch (err) {
+            console.warn(`[camera-view] ${this.id}: onGhudBarHover error:`, err.message);
+          }
+          break;
+        }
+      }
+      if (!handled) {
+        // Fallback: check if time is in the future (LIVE zone)
+        const now = new Date();
+        const hoverDate = new Date(now);
+        hoverDate.setHours(hours, minutes, 0, 0);
+        const isFuture = hoverDate > now;
+
+        if (isFuture) {
+          ghudTooltip.textContent = '▶ LIVE';
+          ghudTooltip.classList.add('visible', 'live');
+          ghudTooltip.classList.remove('unavailable');
+        } else {
+          ghudTooltip.textContent = timeText;
+          ghudTooltip.classList.add('visible');
+          ghudTooltip.classList.remove('unavailable', 'live');
+        }
+        ghudTooltip.style.left = `${fraction * 100}%`;
+      }
     });
     ghudBar?.addEventListener('mouseleave', () => ghudTooltip?.classList.remove('visible', 'live'));
 
@@ -950,24 +996,36 @@ export class CameraView {
 
   matchesQuery(query) {
     if (!query) return true;
-    if (/^[\d,\-\s]+$/.test(query.trim())) {
-      const camNum = parseInt(this.id.replace(/\D/g, ''));
-      const nums = new Set();
-      for (const part of query.split(',')) {
-        const trimmed = part.trim();
-        if (!trimmed) continue;
-        const range = trimmed.split('-').map(s => parseInt(s.trim()));
-        if (range.length === 2 && !isNaN(range[0]) && !isNaN(range[1])) {
-          const [from, to] = [Math.min(range[0], range[1]), Math.max(range[0], range[1])];
-          for (let i = from; i <= to; i++) nums.add(i);
-        } else if (!isNaN(range[0])) {
-          nums.add(range[0]);
-        }
+
+    // Split by comma, check if camera matches ANY part
+    const parts = query.split(',').map(s => s.trim()).filter(Boolean);
+    if (parts.length === 0) return true;
+
+    const camId = this.id.toLowerCase();
+    const camLabel = this.label.toLowerCase();
+    const camNum = parseInt(this.id.replace(/\D/g, ''));
+
+    return parts.some(part => {
+      // Numeric range: "5-8"
+      const rangeMatch = part.match(/^(\d+)\s*-\s*(\d+)$/);
+      if (rangeMatch) {
+        const [from, to] = [parseInt(rangeMatch[1]), parseInt(rangeMatch[2])];
+        const [lo, hi] = [Math.min(from, to), Math.max(from, to)];
+        return camNum >= lo && camNum <= hi;
       }
-      return nums.has(camNum);
-    }
-    const q = query.toLowerCase();
-    return this.id.toLowerCase().includes(q) || this.label.toLowerCase().includes(q);
+      // Pure number: "5"
+      if (/^\d+$/.test(part)) {
+        return camNum === parseInt(part);
+      }
+      // Camera ID pattern (letter(s) + number): exact match against ID
+      // "d1" matches "D1" only, not "D11"
+      const q = part.toLowerCase();
+      if (/^[a-z]+\d+$/i.test(part)) {
+        return camId === q;
+      }
+      // Free text: substring match against ID or label
+      return camId.includes(q) || camLabel.includes(q);
+    });
   }
 
   // ── Feature proxy methods (backward compat for app.js / grid.js) ──

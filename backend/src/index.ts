@@ -15,7 +15,6 @@ import { initSmartEvents } from './services/smart-events';
 import { cameraRoutes } from './routes/cameras';
 import { playbackRoutes } from './routes/playback';
 import { hdStreamRoutes } from './routes/hd-stream';
-import { transcodeRoutes } from './routes/transcode';
 import { healthRoutes } from './routes/health';
 import { statsRoutes } from './routes/stats';
 import { snapshotRoutes } from './routes/snapshots';
@@ -188,7 +187,6 @@ async function main() {
   await fastify.register(cameraRoutes);
   await fastify.register(playbackRoutes);
   await fastify.register(hdStreamRoutes);
-  await fastify.register(transcodeRoutes);
   await fastify.register(healthRoutes);
   await fastify.register(statsRoutes);
   await fastify.register(snapshotRoutes);
@@ -216,7 +214,7 @@ async function main() {
 
   setTimeout(() => cleanupAllInternal(), 3000);
 
-  // Reap orphaned HD/playback/transcode streams every 15s (30s TTL)
+  // Reap orphaned HD/playback streams every 15s (30s TTL)
   setInterval(() => reapOrphanStreams(30000), 15000);
 
   // Auto-recover base streams if go2rtc lost them (crash/restart) — check every 15s

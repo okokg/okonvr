@@ -99,7 +99,7 @@ export async function cleanupAllInternal(): Promise<void> {
   } catch {}
 }
 
-/** Cleanup ALL client-session streams (HD, playback, transcode) from go2rtc. */
+/** Cleanup ALL client-session streams (HD, playback) from go2rtc. */
 export async function cleanupSessionStreams(): Promise<void> {
   try {
     const res = await fetch(`${go2rtcApi}/api/streams`);
