@@ -11,6 +11,7 @@ import { setActivity, clearActivity } from './services/server-activity';
 import { setUiConfig, setClientExtras } from './services/config-store';
 import { startNvrHealth, onNvrOnline } from './services/nvr-health';
 import { startSnapshotCache } from './services/snapshot-cache';
+import { initSmartEvents } from './services/smart-events';
 import { cameraRoutes } from './routes/cameras';
 import { playbackRoutes } from './routes/playback';
 import { hdStreamRoutes } from './routes/hd-stream';
@@ -20,6 +21,7 @@ import { statsRoutes } from './routes/stats';
 import { snapshotRoutes } from './routes/snapshots';
 import { talkbackRoutes } from './routes/talkback';
 import { playbackThumbnailRoutes } from './routes/playback-thumbnail';
+import { eventRoutes } from './routes/events';
 
 /** Run auto-discovery for a single NVR. Pure function — caller manages activities. */
 async function discoverNvr(nvr: NvrEntry): Promise<boolean> {
@@ -43,6 +45,11 @@ async function discoverNvr(nvr: NvrEntry): Promise<boolean> {
       id: `${nvr.id_prefix}${d.channel}`,
       channel: d.channel,
       label: d.name,
+      ip: d.ip,
+      model: d.model,
+      mac: d.mac,
+      firmware: d.firmware,
+      serial: d.serial,
     }));
 
     const excluded = discovered.length - filtered.length;
@@ -116,10 +123,54 @@ async function main() {
   clearActivity('discovery');
 
   const totalCameras = config.nvrs.reduce((n, nvr) => n + nvr.cameras.length, 0);
-  console.log(`OKO NVR v0.1.0 — ${config.nvrs.length} NVR(s), ${totalCameras} cameras`);
+  console.log(`\nOKO NVR v0.1.0 — ${config.nvrs.length} NVR(s), ${totalCameras} cameras\n`);
+
   for (const nvr of config.nvrs) {
-    console.log(`  ${nvr.name}: ${nvr.config.provider} @ ${nvr.config.host} (${nvr.cameras.length} cameras)`);
+    const sorted = [...nvr.cameras].sort((a, b) => a.channel - b.channel);
+
+    // Column definitions: [header, getter, maxWidth]
+    const colDefs: [string, (c: typeof sorted[0]) => string, number][] = [
+      ['ID',    c => c.id,                              6],
+      ['CH',    c => String(c.channel),                 3],
+      ['Label', c => c.label?.trim() || '—',           20],
+      ['IP',    c => c.ip?.trim() || '—',              15],
+      ['Model', c => c.model?.trim() || '(OEM)',       24],
+      ['MAC',   c => c.mac?.trim() || '—',             17],
+      ['S/N',   c => c.serial?.trim() || '—',          40],
+      ['FW',    c => c.firmware?.trim() || '—',        22],
+    ];
+
+    // Calculate widths
+    const W = colDefs.map(([hdr, get, max]) =>
+      Math.min(max, Math.max(hdr.length, ...sorted.map(c => get(c).length)))
+    );
+
+    const cell = (w: number) => w + 2;
+    const hdr = ` ${nvr.name}  ·  ${nvr.config.provider} @ ${nvr.config.host}:${nvr.config.port}  ·  ${sorted.length} cameras `;
+
+    // Expand last column if header wider
+    const tableW = W.reduce((s, w) => s + cell(w), 0) + W.length - 1;
+    if (hdr.length > tableW) W[W.length - 1] += hdr.length - tableW;
+
+    const innerW = W.reduce((s, w) => s + cell(w), 0) + W.length - 1;
+
+    const sep = (l: string, m: string, r: string) =>
+      l + W.map(w => '─'.repeat(cell(w))).join(m) + r;
+
+    console.log(`┌${'─'.repeat(innerW)}┐`);
+    console.log(`│${hdr.padEnd(innerW)}│`);
+    console.log(sep('├', '┬', '┤'));
+    console.log('│ ' + colDefs.map(([h], i) => h.padEnd(W[i])).join(' │ ') + ' │');
+    console.log(sep('├', '┼', '┤'));
+
+    for (const cam of sorted) {
+      const vals = colDefs.map(([, get, _], i) => get(cam).substring(0, W[i]).padEnd(W[i]));
+      console.log('│ ' + vals.join(' │ ') + ' │');
+    }
+
+    console.log(sep('└', '┴', '┘'));
   }
+  console.log('');
   clearActivity('discovery');
   setActivity('startup', 'Initializing streams...');
 
@@ -143,6 +194,7 @@ async function main() {
   await fastify.register(snapshotRoutes);
   await fastify.register(playbackThumbnailRoutes);
   await fastify.register(talkbackRoutes);
+  await fastify.register(eventRoutes);
 
   await fastify.listen({ port: config.server.port, host: '0.0.0.0' });
   console.log(`Backend listening on port ${config.server.port}`);
@@ -152,6 +204,7 @@ async function main() {
   startConfigWatcher(config);
   startNvrHealth();
   startSnapshotCache(config.snapshots, config.go2rtc.api);
+  initSmartEvents();
 
   // Wire NVR online callback → re-discover cameras
   onNvrOnline((nvrName) => {

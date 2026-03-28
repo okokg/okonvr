@@ -113,7 +113,7 @@ export class HikvisionProvider implements NvrProvider {
   async discoverChannels(): Promise<DiscoveredCamera[] | null> {
     console.log(`Hikvision discovery: ${this.httpBase}`);
 
-    // Try 1: InputProxy (NVR) — has camera names
+    // Try 1: InputProxy (NVR) — has camera names + IP
     const inputProxy = await this.fetchAndParse(
       '/ISAPI/ContentMgmt/InputProxy/channels',
       'InputProxy',
@@ -123,17 +123,26 @@ export class HikvisionProvider implements NvrProvider {
         for (const block of blocks) {
           const idMatch = block.match(/<id>(\d+)<\/id>/);
           const nameMatch = block.match(/<name>(.*?)<\/name>/);
+          const ipMatch = block.match(/<ipAddress>([\d.]+)<\/ipAddress>/);
           if (idMatch) {
             cameras.push({
               channel: parseInt(idMatch[1]),
               name: nameMatch?.[1] || undefined,
+              ip: ipMatch?.[1] || undefined,
             });
           }
         }
         return cameras;
       }
     );
-    if (inputProxy && inputProxy.length > 0) return inputProxy;
+
+    if (inputProxy && inputProxy.length > 0) {
+      // Enrich with online status from /channels/status
+      await this.enrichWithStatus(inputProxy);
+      // Enrich with model from /channels/{id}/deviceInfo
+      await this.enrichWithDeviceInfo(inputProxy);
+      return inputProxy;
+    }
 
     // Try 2: Streaming channels (fallback) — no names, parse track IDs
     const streaming = await this.fetchAndParse(
@@ -189,6 +198,59 @@ export class HikvisionProvider implements NvrProvider {
       console.log(`  ${label}: error — ${e.message}`);
       return null;
     }
+  }
+
+  /** Enrich cameras with online status from InputProxy/channels/status. */
+  private async enrichWithStatus(cameras: DiscoveredCamera[]): Promise<void> {
+    try {
+      const { status, body } = await httpGet(
+        `${this.httpBase}/ISAPI/ContentMgmt/InputProxy/channels/status`, this.auth
+      );
+      if (status !== 200 || !body) return;
+
+      const blocks = body.match(/<InputProxyChannelStatus>[\s\S]*?<\/InputProxyChannelStatus>/g) || [];
+      const statusMap = new Map<number, boolean>();
+      for (const block of blocks) {
+        const idMatch = block.match(/<id>(\d+)<\/id>/);
+        const onlineMatch = block.match(/<online>(true|false)<\/online>/i);
+        if (idMatch && onlineMatch) {
+          statusMap.set(parseInt(idMatch[1]), onlineMatch[1].toLowerCase() === 'true');
+        }
+      }
+
+      for (const cam of cameras) {
+        if (statusMap.has(cam.channel)) cam.online = statusMap.get(cam.channel);
+      }
+      console.log(`  Status: ${statusMap.size} channels, ${[...statusMap.values()].filter(v => v).length} online`);
+    } catch (e: any) {
+      console.log(`  Status: ${e.message}`);
+    }
+  }
+
+  /** Enrich cameras with model/serial/MAC/firmware from per-channel deviceInfo. */
+  private async enrichWithDeviceInfo(cameras: DiscoveredCamera[]): Promise<void> {
+    let enriched = 0;
+    for (const cam of cameras) {
+      try {
+        const { status, body } = await httpGet(
+          `${this.httpBase}/ISAPI/ContentMgmt/InputProxy/channels/${cam.channel}/deviceInfo`, this.auth, 3000
+        );
+        if (status !== 200 || !body) continue;
+
+        const get = (tag: string) => {
+          const m = body.match(new RegExp(`<${tag}>(.*?)</${tag}>`));
+          const v = m?.[1]?.trim();
+          return v || undefined;
+        };
+
+        cam.model = get('model');
+        cam.serial = get('serialNumber');
+        cam.mac = get('macAddress');
+        cam.firmware = get('firmwareVersion');
+        enriched++;
+      } catch {}
+    }
+    console.log(`  DeviceInfo: enriched ${enriched}/${cameras.length} cameras`);
   }
 
   /**

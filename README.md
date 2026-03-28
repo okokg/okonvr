@@ -10,18 +10,19 @@ OKO NVR PLAYER connects to Hikvision and Dahua NVRs via RTSP, streams live video
 - WebRTC live streaming with sub-stream (SD) and main-stream (HD) switching
 - Native H.265/HEVC WebRTC support — no transcoding on Chrome 136+, Safari 18+
 - Automatic MSE fallback for browsers without H.265 WebRTC (Firefox)
-- NVR archive playback with 24h seek timeline and quick seek buttons
+- NVR archive playback with 24h seek timeline, thumbnail preview, day navigation
+- Two-way audio (talkback/intercom) — push-to-talk and toggle modes
 - Auto-discovery of cameras from Hikvision ISAPI and Dahua CGI APIs
 - Multi-NVR support with per-NVR grouping and filtering
 - Audio support (PCMU/PCMA native, AAC via MSE)
+- Digital zoom (2×–4×) with minimap and pan
 - Hot reload — edit `oko.yaml`, cameras update without restart
 - Full keyboard navigation — no mouse required
 - Dark/light theme, compact mode, auto-fit grid
-- UI configuration via oko.yaml
 
 ## H.265/HEVC Support
 
-OKO NVR PLAYER automatically detects browser H.265 WebRTC capability and streams HEVC directly without transcoding when supported. No server-side processing needed.
+Automatically detects browser H.265 capability and streams HEVC directly without transcoding.
 
 | Browser | H.265 WebRTC | Fallback |
 |---------|-------------|----------|
@@ -29,9 +30,6 @@ OKO NVR PLAYER automatically detects browser H.265 WebRTC capability and streams
 | Safari 18+ | ✓ | — |
 | Firefox | ✗ | MSE (auto) |
 | Edge 136+ | ✓ (Chromium-based) | — |
-| Older Chrome | ✗ | MSE (auto) |
-
-When H.265 is supported, a green **H.265** badge appears in the header. Both sub-streams and main-streams can use H.265 — ~50% bandwidth savings compared to H.264 at the same quality.
 
 ## Quick Start
 
@@ -83,23 +81,25 @@ Three Docker containers:
 - **go2rtc** — WebRTC/MSE media server, connects to NVRs via RTSP
 - **nginx** — reverse proxy with basic auth, serves static frontend
 
-## Configuration
+## Talkback (Two-Way Audio)
 
-Single config file: `oko.yaml`. See [docs/configuration.md](docs/configuration.md) for full reference.
+Push-to-talk intercom for cameras with built-in speakers. Works via direct RTSP connection to camera IP (bypasses NVR).
 
-Minimal config:
+**Supported cameras:** Dahua models with `-AS-` (speaker) or `-PV-` (active deterrence) in model name, Hikvision cameras with TwoWayAudio channels.
 
+**Usage:**
+- Press `V` in fullscreen to toggle intercom
+- Click mic icon in status bar
+- Hold PTT button (right side) for push-to-talk
+- Double-click PTT to lock (hands-free mode)
+
+Auto-detection from NVR API, or manual override:
 ```yaml
 nvrs:
-  - name: office
-    provider: hikvision
-    host: 192.168.0.2
-    username: admin
-    password: changeme
-    id_prefix: "D"
+  - name: cameras
+    provider: dahua
+    talkback_channels: [5, 8, 10]
 ```
-
-Cameras auto-discovered from NVR. No channels needed.
 
 ## Keyboard Shortcuts
 
@@ -112,9 +112,11 @@ See [docs/keyboard-shortcuts.md](docs/keyboard-shortcuts.md) for full reference.
 | H | Toggle SD/HD stream |
 | F | Native fullscreen |
 | M | Mute / unmute |
-| P | Playback panel (in fullscreen) |
+| V | Toggle intercom |
+| P | Playback panel |
+| +/- | Digital zoom |
+| Z | Reset zoom |
 | C | Compact mode |
-| Esc | Exit fullscreen |
 
 ## Documentation
 
@@ -126,18 +128,11 @@ See [docs/keyboard-shortcuts.md](docs/keyboard-shortcuts.md) for full reference.
 
 ## Supported NVRs
 
-| Provider | Live | Playback | Discovery | Audio | Tested |
-|----------|------|----------|-----------|-------|--------|
-| Hikvision | ✓ | ✓ | ISAPI (Digest auth) | PCMU/PCMA | DS-7732NI-K4 |
-| Dahua | ✓ | ✓ | CGI API (Digest auth) | PCMU/PCMA/AAC | DHI-NVR5216-EI |
-| Generic | ✓ | ✓ | Manual | Depends | — |
-
-## Tested Platforms
-
-| Device | Browser | H.265 WebRTC | Notes |
-|--------|---------|-------------|-------|
-| MacBook M4, macOS 15.6 | Chrome 145 | ✓ | H.264 + H.265 via WebRTC, no transcoding |
-| MacBook M4, macOS 15.6 | Firefox | ✗ | Auto fallback to MSE for H.265 streams |
+| Provider | Live | Playback | Discovery | Audio | Talkback | Tested |
+|----------|------|----------|-----------|-------|----------|--------|
+| Hikvision | ✓ | ✓ | ISAPI | PCMU/PCMA | ISAPI | DS-7732NI-K4 |
+| Dahua | ✓ | ✓ | CGI API | PCMU/PCMA/AAC | Direct RTSP | DHI-NVR5216-EI |
+| Generic | ✓ | ✓ | Manual | Depends | — | — |
 
 ## License
 

@@ -1,6 +1,8 @@
 import { registry } from './camera-registry';
 import { httpGetBuffer } from '../utils/http-client';
 import { SnapshotsConfig } from '../config';
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'fs';
+import { join } from 'path';
 
 let GO2RTC_API = 'http://go2rtc:1984';
 let config: SnapshotsConfig = {
@@ -11,10 +13,38 @@ let config: SnapshotsConfig = {
   timeout: 8000,
 };
 
+const SNAPSHOT_DIR = '/data/snapshots';
+
 /** In-memory cache: cameraId → { jpeg: Buffer, ts: number } */
 const cache = new Map<string, { jpeg: Buffer; ts: number }>();
 
 let running = false;
+
+/** Load persisted snapshots from disk on startup. */
+function loadFromDisk(): void {
+  if (!existsSync(SNAPSHOT_DIR)) return;
+  let loaded = 0;
+  for (const file of readdirSync(SNAPSHOT_DIR)) {
+    if (!file.endsWith('.jpg')) continue;
+    const id = file.replace('.jpg', '');
+    try {
+      const jpeg = readFileSync(join(SNAPSHOT_DIR, file));
+      if (jpeg.length > 500) {
+        cache.set(id, { jpeg, ts: 0 }); // ts=0 means "from disk, age unknown"
+        loaded++;
+      }
+    } catch {}
+  }
+  if (loaded > 0) console.log(`[snapshot] Loaded ${loaded} persisted snapshots from disk`);
+}
+
+/** Save snapshot to disk (fire-and-forget). */
+function saveToDisk(cameraId: string, jpeg: Buffer): void {
+  try {
+    if (!existsSync(SNAPSHOT_DIR)) mkdirSync(SNAPSHOT_DIR, { recursive: true });
+    writeFileSync(join(SNAPSHOT_DIR, `${cameraId}.jpg`), jpeg);
+  } catch {}
+}
 
 /** Get cached snapshot for a camera. Returns null if not available. */
 export function getSnapshot(cameraId: string): { jpeg: Buffer; ts: number } | null {
@@ -63,6 +93,7 @@ async function refreshAll(): Promise<void> {
       jpeg = await fetchNativeSnapshot(id);
       if (jpeg && jpeg.length > 500) {
         cache.set(id, { jpeg, ts: Date.now() });
+        saveToDisk(id, jpeg);
         native++;
         await new Promise(r => setTimeout(r, config.delay));
         continue;
@@ -73,6 +104,7 @@ async function refreshAll(): Promise<void> {
       jpeg = await fetchGo2rtcSnapshot(id);
       if (jpeg && jpeg.length > 500) {
         cache.set(id, { jpeg, ts: Date.now() });
+        saveToDisk(id, jpeg);
         fallback++;
         await new Promise(r => setTimeout(r, config.delay));
         continue;
@@ -99,6 +131,9 @@ export function startSnapshotCache(snapshotsConfig: SnapshotsConfig, go2rtcApi: 
     console.log('[snapshot] Cache disabled in config');
     return;
   }
+
+  // Load persisted snapshots before first refresh
+  loadFromDisk();
 
   running = true;
   const intervalMs = config.interval * 1000;

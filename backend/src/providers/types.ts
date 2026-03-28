@@ -8,6 +8,11 @@ export interface CameraConfig {
   channel: number;
   label?: string;
   group?: string;
+  ip?: string;
+  model?: string;
+  mac?: string;
+  firmware?: string;
+  serial?: string;
   // Generic provider: user-specified URLs
   live_url?: string;
   playback_url?: string;
@@ -119,6 +124,11 @@ export interface DiscoveredCamera {
   channel: number;
   name?: string;
   online?: boolean;
+  ip?: string;
+  model?: string;
+  mac?: string;
+  firmware?: string;
+  serial?: string;
 }
 
 /** Resolutions available for transcoding. null = original (no transcode). */

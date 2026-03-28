@@ -14,7 +14,7 @@ export async function snapshotRoutes(fastify: FastifyInstance) {
     reply
       .header('Content-Type', 'image/jpeg')
       .header('Cache-Control', 'no-cache, max-age=30')
-      .header('X-Snapshot-Age', String(Math.round((Date.now() - snap.ts) / 1000)))
+      .header('X-Snapshot-Age', snap.ts > 0 ? String(Math.round((Date.now() - snap.ts) / 1000)) : 'stale')
       .send(snap.jpeg);
   });
 }

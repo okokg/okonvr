@@ -86,8 +86,27 @@ export class DahuaProvider implements NvrProvider {
     return /^[A-Za-z]\w{0,15}$/.test(id);
   }
 
-  /** Per-camera direct connection info (populated by detectTalkback). */
+  /** Per-camera direct connection info (populated by detectTalkback or discoverChannels). */
   private cameraDirectInfo = new Map<number, { ip: string; user: string; pass: string; port: number }>();
+
+  /** Fetch RemoteDevice info from NVR. Returns map of 0-based index → props. */
+  private async fetchRemoteDeviceInfo(): Promise<Map<number, Map<string, string>>> {
+    const cameras = new Map<number, Map<string, string>>();
+    try {
+      const url = `${this.httpBase}/cgi-bin/configManager.cgi?action=getConfig&name=RemoteDevice`;
+      const { status, body } = await httpGet(url, this.auth);
+      if (status !== 200 || !body) return cameras;
+
+      for (const line of body.split('\n')) {
+        const m = line.match(/NETCAMERA_INFO_(\d+)\.(\w+)=(.*)/);
+        if (!m) continue;
+        const idx = parseInt(m[1]);
+        if (!cameras.has(idx)) cameras.set(idx, new Map());
+        cameras.get(idx)!.set(m[2], m[3].trim());
+      }
+    } catch {}
+    return cameras;
+  }
 
   /**
    * Detect two-way audio channels.
@@ -105,20 +124,8 @@ export class DahuaProvider implements NvrProvider {
     this.cameraDirectInfo.clear();
 
     try {
-      const url = `${this.httpBase}/cgi-bin/configManager.cgi?action=getConfig&name=RemoteDevice`;
-      const { status, body } = await httpGet(url, this.auth);
-      console.log(`    RemoteDevice: HTTP ${status}, ${body?.length || 0}b`);
-      if (status !== 200 || !body) return result;
-
-      // Group lines by camera index
-      const cameras = new Map<number, Map<string, string>>();
-      for (const line of body.split('\n')) {
-        const m = line.match(/NETCAMERA_INFO_(\d+)\.(\w+)=(.*)/);
-        if (!m) continue;
-        const idx = parseInt(m[1]);
-        if (!cameras.has(idx)) cameras.set(idx, new Map());
-        cameras.get(idx)!.set(m[2], m[3].trim());
-      }
+      const cameras = await this.fetchRemoteDeviceInfo();
+      console.log(`    RemoteDevice: ${cameras.size} cameras`);
 
       for (const [idx, props] of cameras) {
         const channel = idx + 1; // 0-based → 1-based
@@ -128,12 +135,10 @@ export class DahuaProvider implements NvrProvider {
         const pass = props.get('Password') || '';
         const rtspPort = parseInt(props.get('RtspPort') || '0') || 554;
 
-        // Store direct connection info for all cameras (useful for talkback)
         if (ip && user) {
           this.cameraDirectInfo.set(channel, { ip, user, pass, port: rtspPort });
         }
 
-        // Check model for speaker capability
         if (/-AS[-\s]|-PV[-\s]/i.test(model)) {
           result.add(channel);
           console.log(`    ch${channel}: ${model} @ ${ip} → speaker`);
@@ -218,7 +223,27 @@ export class DahuaProvider implements NvrProvider {
       }
 
       console.log(`Dahua CGI: found ${cameras.length} cameras`);
-      cameras.forEach(c => console.log(`  ch${c.channel}: ${c.name || '(no name)'}`));
+
+      // Enrich with IP/model/mac/serial/firmware from RemoteDevice
+      const remoteInfo = await this.fetchRemoteDeviceInfo();
+      for (const cam of cameras) {
+        const props = remoteInfo.get(cam.channel - 1); // 0-based index
+        if (props) {
+          cam.ip = props.get('Address') || undefined;
+          cam.model = props.get('DeviceType') || undefined;
+          cam.mac = props.get('Mac') || undefined;
+          cam.serial = props.get('SerialNo') || undefined;
+          cam.firmware = props.get('Version') || props.get('SoftwareVersion') || undefined;
+        }
+      }
+
+      cameras.forEach(c => {
+        const parts = [`ch${c.channel}: ${c.name || '(no name)'}`];
+        if (c.ip) parts.push(`@ ${c.ip}`);
+        if (c.model) parts.push(`[${c.model}]`);
+        if (c.mac) parts.push(c.mac);
+        console.log(`  ${parts.join(' ')}`);
+      });
       return cameras.sort((a, b) => a.channel - b.channel);
     } catch (e: any) {
       console.warn(`Dahua CGI discovery failed: ${e.message}`);

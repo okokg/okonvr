@@ -1,0 +1,19 @@
+{
+  "name": "oko-player",
+  "version": "0.1.0",
+  "description": "Camera surveillance player — WebRTC/MSE live streaming with archive playback",
+  "type": "module",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./core/*": "./src/core/*",
+    "./features/*": "./src/features/*",
+    "./styles/*": "./styles/*"
+  },
+  "files": [
+    "src/",
+    "styles/"
+  ],
+  "keywords": ["camera", "nvr", "webrtc", "mse", "surveillance", "player", "hikvision", "dahua"],
+  "license": "MIT"
+}

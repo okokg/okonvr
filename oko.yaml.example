@@ -71,3 +71,5 @@ nvrs:
   #   password: changeme2
   #   id_prefix: "W"
   #   channels: "*, !4"
+  #   talkback_channels: [1, 5, 8]  # manual override for talkback-capable cameras
+  #                                   # (merged with auto-detected, not replaced)

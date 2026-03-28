@@ -10,12 +10,10 @@
  * - Notifications
  */
 
-import { ApiClient } from './api.js';
-import { CameraGrid } from './grid.js';
-import { CameraView } from './camera-view.js';
-import { CamPlayer } from './player.js';
+import { ApiClient, CameraGrid, CameraView, CamPlayer } from './oko-player/index.js';
+import { QualityFeature, PlaybackFeature, ZoomFeature, TalkbackFeature } from './oko-player/index.js';
 import { NotificationManager } from './notifications.js';
-import { SEARCH_DEBOUNCE_MS, VERSION } from './config.js';
+import { SEARCH_DEBOUNCE_MS, VERSION } from './oko-player/config.js';
 
 (window._oko = window._oko || {}).app = 'a7a4';
 
@@ -508,6 +506,14 @@ export class App {
   // ── Grid callbacks ──
 
   _bindGridCallbacks() {
+    // Attach features to each camera view when created by grid
+    this.grid.onViewCreated = (view) => {
+      view.use(new QualityFeature())
+          .use(new PlaybackFeature())
+          .use(new ZoomFeature())
+          .use(new TalkbackFeature());
+    };
+
     this.grid.onStatsChange = (online, offline) => {
       this._onlineEl.textContent = online;
       this._offlineEl.textContent = offline;
@@ -1093,6 +1099,15 @@ export class App {
           return;
         }
 
+        // E / Shift+E = next/prev smart event
+        if (code === 'KeyE' && !e.ctrlKey && !e.metaKey) {
+          const pf = cam._f('PlaybackFeature');
+          if (pf && pf.handleEventKey('e', e.shiftKey)) {
+            e.preventDefault();
+            return;
+          }
+        }
+
         // V = talkback toggle (voice, lock mode)
         if (code === 'KeyV' && !e.ctrlKey && !e.metaKey) {
           if (cam.hasTalkback) {
@@ -1531,6 +1546,8 @@ export class App {
           <div class="kbd-row"><kbd>Space</kbd><span>Pause / resume</span></div>
           <div class="kbd-row"><kbd>L</kbd><span>Go to LIVE / open playback</span></div>
           <div class="kbd-row"><kbd>P</kbd><span>Playback panel</span></div>
+          <div class="kbd-row"><kbd>E</kbd><span>Next event</span></div>
+          <div class="kbd-row"><kbd>Shift</kbd>+<kbd>E</kbd><span>Previous event</span></div>
           <div class="kbd-row"><kbd>H</kbd><span>Toggle HD</span></div>
           <div class="kbd-row"><kbd>1</kbd>-<kbd>4</kbd><span>Zoom 1×–4×</span></div>
           <div class="kbd-row"><kbd>Z</kbd><span>Reset zoom</span></div>

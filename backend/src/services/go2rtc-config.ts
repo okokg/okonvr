@@ -1,14 +1,47 @@
 import fs from 'fs';
+import path from 'path';
 import YAML from 'yaml';
 import { OkoConfig } from '../config';
 import { registry } from './camera-registry';
 
 const GO2RTC_CONFIG_PATH = process.env.GO2RTC_CONFIG_PATH || '/config/go2rtc/go2rtc.yaml';
 
+/** Mutex: prevent concurrent writes from rediscovery + config watcher. */
+let writing = false;
+let pendingConfig: OkoConfig | null = null;
+
 /**
  * Generate go2rtc.yaml from config + camera registry.
+ *
+ * Uses atomic write (temp file + rename) to prevent go2rtc from
+ * reading a partially-written file. Mutex prevents concurrent
+ * generation from overlapping callers (rediscovery, config watcher).
  */
 export function generateGo2rtcConfig(config: OkoConfig): void {
+  if (writing) {
+    // Another write in progress — queue this one
+    pendingConfig = config;
+    console.log(`[go2rtc-config] Write in progress, queued`);
+    return;
+  }
+
+  writing = true;
+  try {
+    _writeConfig(config);
+  } finally {
+    writing = false;
+
+    // Process queued write if any
+    if (pendingConfig) {
+      const queued = pendingConfig;
+      pendingConfig = null;
+      console.log(`[go2rtc-config] Processing queued write`);
+      generateGo2rtcConfig(queued);
+    }
+  }
+}
+
+function _writeConfig(config: OkoConfig): void {
   const streams = registry.generateAllStreams();
 
   const go2rtcConfig: Record<string, unknown> = {
@@ -42,9 +75,15 @@ export function generateGo2rtcConfig(config: OkoConfig): void {
     YAML.stringify(go2rtcConfig, { lineWidth: 0 }),
   ].join('\n');
 
-  const dir = GO2RTC_CONFIG_PATH.substring(0, GO2RTC_CONFIG_PATH.lastIndexOf('/'));
+  const dir = path.dirname(GO2RTC_CONFIG_PATH);
   if (dir) fs.mkdirSync(dir, { recursive: true });
 
-  fs.writeFileSync(GO2RTC_CONFIG_PATH, yamlStr, 'utf8');
+  // Atomic write: temp file + rename
+  // rename() is atomic on the same filesystem (POSIX guarantee).
+  // Prevents go2rtc from reading a half-written file via inotify.
+  const tmpPath = GO2RTC_CONFIG_PATH + `.tmp.${process.pid}`;
+  fs.writeFileSync(tmpPath, yamlStr, 'utf8');
+  fs.renameSync(tmpPath, GO2RTC_CONFIG_PATH);
+
   console.log(`Generated ${GO2RTC_CONFIG_PATH} with ${Object.keys(streams).length} streams`);
 }
