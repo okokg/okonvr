@@ -529,3 +529,31 @@ body {
 
 .watch-filter-label { cursor: pointer; }
 .watch-filter-label input { accent-color: #ff4757; margin-right: 4px; }
+
+.watch-ai-section { justify-content: space-between; }
+.watch-ai-status {
+  font-family: var(--mono);
+  font-size: 9px;
+  color: #666;
+}
+.watch-ai-status.ready { color: #00d4aa; }
+.watch-ai-status.error { color: #ff4757; }
+
+.watch-type-filters {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.watch-type-label {
+  font-size: 11px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+.watch-type-label input { margin: 0; cursor: pointer; }
+.watch-type-motion input { accent-color: #888; }
+.watch-type-human input { accent-color: #ff4757; }
+.watch-type-vehicle input { accent-color: #ffa502; }
+.watch-type-animal input { accent-color: #00d4aa; }

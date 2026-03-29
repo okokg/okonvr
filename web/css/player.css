@@ -2425,18 +2425,6 @@
   transition: border-color 8s ease-out;
 }
 
-.watch-hidden { display: none !important; }
-
-/* Red dot in grid HUD */
-.watch-dot {
-  display: inline-block;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: #ff4757;
-  margin-left: 4px;
-  vertical-align: middle;
-}
 
 /* ── Watch Mode — motion detection ── */
 
@@ -2448,29 +2436,89 @@
 .cam.watch-motion {
   border: 3px solid rgba(255, 71, 87, 0.9) !important;
   animation: watch-pulse 1.5s ease infinite;
+  opacity: 1;
+  filter: none;
+  transition: opacity 0.3s, filter 0.3s;
 }
 
 .cam.watch-cooldown {
   border: 3px solid rgba(255, 71, 87, 0.3) !important;
   animation: none;
-  transition: border-color 10s ease-out;
+  transition: border-color 10s ease-out, opacity 0.5s, filter 0.5s;
+  opacity: 0.6;
 }
 
-.cam.watch-hidden { display: none !important; }
+.cam.watch-hidden {
+  opacity: 0.15;
+  filter: grayscale(1);
+  transition: opacity 0.5s, filter 0.5s;
+}
+.cam.watch-hidden .ghud-bar,
+.cam.watch-hidden .ghud-info { opacity: 0; }
+
+/* When a camera is fullscreen, fully hide all other cameras */
+.grid:has(.cam.fullscreen) .cam:not(.fullscreen).watch-hidden,
+.grid:has(.cam.fullscreen) .cam:not(.fullscreen).watch-motion,
+.grid:has(.cam.fullscreen) .cam:not(.fullscreen).watch-cooldown { opacity: 0; pointer-events: none; }
+
+/* Detection type — border color overrides */
+.cam.watch-motion.watch-human { border-color: rgba(255, 71, 87, 0.9) !important; }
+.cam.watch-motion.watch-vehicle { border-color: rgba(255, 165, 2, 0.9) !important; }
+.cam.watch-motion.watch-animal { border-color: rgba(0, 212, 170, 0.9) !important; }
+
+@keyframes watch-pulse-human {
+  0%, 100% { border-color: rgba(255, 71, 87, 0.9); }
+  50% { border-color: rgba(255, 71, 87, 0.4); }
+}
+@keyframes watch-pulse-vehicle {
+  0%, 100% { border-color: rgba(255, 165, 2, 0.9); }
+  50% { border-color: rgba(255, 165, 2, 0.4); }
+}
+@keyframes watch-pulse-animal {
+  0%, 100% { border-color: rgba(0, 212, 170, 0.9); }
+  50% { border-color: rgba(0, 212, 170, 0.4); }
+}
+
+.cam.watch-motion.watch-human { animation-name: watch-pulse-human; }
+.cam.watch-motion.watch-vehicle { animation-name: watch-pulse-vehicle; }
+.cam.watch-motion.watch-animal { animation-name: watch-pulse-animal; }
 
 /* HUD dot */
 .watch-dot {
-  display: inline-block;
-  width: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 6px;
   height: 6px;
   border-radius: 50%;
   background: #ff4757;
   margin-left: 4px;
   vertical-align: middle;
   flex-shrink: 0;
+  font-size: 7px;
+  color: #fff;
+  line-height: 1;
+}
+.watch-dot:not(:empty) {
+  min-width: 12px;
+  height: 12px;
+  border-radius: 6px;
+  padding: 0 2px;
 }
 
-/* Grid filter mode — dynamic columns based on visible camera count */
-.grid.watch-filter-mode {
-  grid-template-columns: repeat(var(--watch-cols, 3), 1fr) !important;
+/* HUD dot type colors */
+.watch-dot-human { background: #ff4757; }
+.watch-dot-vehicle { background: #ffa502; }
+.watch-dot-animal { background: #00d4aa; }
+
+/* Grid filter mode — no layout change, cameras dim instead of hiding */
+
+/* Fullscreen camera: override ALL watch-mode styles (must be last) */
+.cam.fullscreen.watch-motion,
+.cam.fullscreen.watch-cooldown,
+.cam.fullscreen.watch-hidden {
+  border: none !important;
+  animation: none !important;
+  opacity: 1 !important;
+  filter: none !important;
 }

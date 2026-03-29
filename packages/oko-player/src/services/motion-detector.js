@@ -19,7 +19,9 @@ export class MotionDetector {
     this._h = height;
     this._canvas = new OffscreenCanvas(width, height);
     this._ctx = this._canvas.getContext('2d', { willReadFrequently: true });
-    this._prev = null; // Uint8Array of previous frame luminance
+    this._prev = null;
+    /** @type {{x:number, y:number, w:number, h:number}|null} Normalized motion region (0–1) */
+    this.motionRegion = null;
   }
 
   /**
@@ -59,20 +61,40 @@ export class MotionDetector {
     // Real motion affects large areas with significant per-pixel change.
     const PX_THRESHOLD = 20;
     let changedPixels = 0;
+    let minX = this._w, minY = this._h, maxX = 0, maxY = 0;
+
     for (let i = 0; i < pixels; i++) {
       if (Math.abs(lum[i] - this._prev[i]) > PX_THRESHOLD) {
         changedPixels++;
+        const x = i % this._w;
+        const y = (i / this._w) | 0;
+        if (x < minX) minX = x;
+        if (x > maxX) maxX = x;
+        if (y < minY) minY = y;
+        if (y > maxY) maxY = y;
       }
     }
     this._prev = lum;
 
-    // Return percentage of significantly changed pixels
+    // Store normalized motion region (0–1 coordinates)
+    if (changedPixels > 0) {
+      this.motionRegion = {
+        x: minX / this._w,
+        y: minY / this._h,
+        w: (maxX - minX + 1) / this._w,
+        h: (maxY - minY + 1) / this._h,
+      };
+    } else {
+      this.motionRegion = null;
+    }
+
     return Math.round((changedPixels / pixels) * 100);
   }
 
   /** Reset stored frame (e.g. after camera reconnect to avoid false spike). */
   reset() {
     this._prev = null;
+    this.motionRegion = null;
   }
 
   /** Release resources. */

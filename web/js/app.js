@@ -781,6 +781,11 @@ export class App {
     const slider = document.getElementById('watch-sensitivity');
     const sliderVal = document.getElementById('watch-sensitivity-val');
     const filterCb = document.getElementById('watch-filter');
+    const aiStatus = document.getElementById('watch-ai-status');
+    const typeMotion = document.getElementById('watch-type-motion');
+    const typeHuman = document.getElementById('watch-type-human');
+    const typeVehicle = document.getElementById('watch-type-vehicle');
+    const typeAnimal = document.getElementById('watch-type-animal');
 
     if (!btn) return;
 
@@ -796,12 +801,14 @@ export class App {
         badge.textContent = '';
         popup.classList.remove('open');
         this._watchPopupOpen = false;
+        if (aiStatus) { aiStatus.textContent = 'off'; aiStatus.className = 'watch-ai-status'; }
         this._showHint('Watch OFF');
       } else {
         this.watchMode.updateCameras(this.grid.cameras);
         this.watchMode.gridElement = this.grid.gridEl;
         this.watchMode.start();
         btn.classList.add('active');
+        if (aiStatus) { aiStatus.textContent = 'loading...'; aiStatus.className = 'watch-ai-status'; }
         this._showHint('Watch ON');
       }
     });
@@ -826,6 +833,24 @@ export class App {
       if (this.watchMode) this.watchMode.motionFilter = filterCb.checked;
     });
 
+    // Type filters (Motion + AI types)
+    const _syncTypeFilters = () => {
+      if (!this.watchMode) return;
+      this.watchMode.typeFilter = {
+        motion: typeMotion?.checked ?? true,
+        human: typeHuman?.checked ?? true,
+        vehicle: typeVehicle?.checked ?? true,
+        animal: typeAnimal?.checked ?? true,
+      };
+    };
+    typeMotion?.addEventListener('change', _syncTypeFilters);
+    typeHuman?.addEventListener('change', _syncTypeFilters);
+    typeVehicle?.addEventListener('change', _syncTypeFilters);
+    typeAnimal?.addEventListener('change', _syncTypeFilters);
+
+    // Store AI status element for later update
+    this._watchAiStatus = aiStatus;
+
     // Prevent popup clicks from closing it
     popup?.addEventListener('click', (e) => e.stopPropagation());
 
@@ -845,12 +870,30 @@ export class App {
     this.watchMode = new WatchMode(this.grid.cameras);
     this.watchMode.gridElement = this.grid.gridEl;
 
+    // AI classifier status
+    const aiStatus = this._watchAiStatus;
+    this.watchMode.onClassifierReady = (ok, error) => {
+      if (!aiStatus) return;
+      if (ok) {
+        aiStatus.textContent = 'ready';
+        aiStatus.className = 'watch-ai-status ready';
+      } else {
+        aiStatus.textContent = error || 'failed';
+        aiStatus.className = 'watch-ai-status error';
+      }
+    };
+
     // Update badge on motion changes
     const badge = document.getElementById('watch-badge');
-    this.watchMode.onMotionUpdate = (count, ids) => {
+    this.watchMode.onMotionUpdate = (count, ids, summary) => {
       if (!badge) return;
       if (count > 0) {
-        badge.textContent = `${count} motion`;
+        const parts = [];
+        if (summary.humans) parts.push(`${summary.humans} human`);
+        if (summary.vehicles) parts.push(`${summary.vehicles} vehicle`);
+        if (summary.animals) parts.push(`${summary.animals} animal`);
+        if (summary.unknown) parts.push(`${summary.unknown} motion`);
+        badge.textContent = parts.join(' · ') || `${count} motion`;
         badge.classList.add('visible');
       } else {
         badge.classList.remove('visible');

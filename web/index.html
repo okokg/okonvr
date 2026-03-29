@@ -41,8 +41,18 @@
             <input type="range" class="watch-slider" id="watch-sensitivity" min="1" max="10" value="5" step="1">
             <span class="watch-slider-val" id="watch-sensitivity-val">5</span>
           </div>
+          <div class="watch-popup-row watch-ai-section">
+            <span class="watch-popup-label">AI detect</span>
+            <span class="watch-ai-status" id="watch-ai-status">off</span>
+          </div>
+          <div class="watch-popup-row watch-type-filters" id="watch-type-filters">
+            <label class="watch-type-label watch-type-motion"><input type="checkbox" id="watch-type-motion" checked> Motion</label>
+            <label class="watch-type-label watch-type-human"><input type="checkbox" id="watch-type-human" checked> Human</label>
+            <label class="watch-type-label watch-type-vehicle"><input type="checkbox" id="watch-type-vehicle" checked> Vehicle</label>
+            <label class="watch-type-label watch-type-animal"><input type="checkbox" id="watch-type-animal" checked> Animal</label>
+          </div>
           <label class="watch-popup-row watch-filter-label">
-            <input type="checkbox" id="watch-filter"> Motion only
+            <input type="checkbox" id="watch-filter"> Detected only
           </label>
         </div>
       </div>

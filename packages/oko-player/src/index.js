@@ -44,3 +44,4 @@ export { PlaybackFeature } from './features/playback.js';
 // Services
 export { WatchMode } from './services/watch-mode.js';
 export { MotionDetector } from './services/motion-detector.js';
+export { ObjectClassifier } from './services/object-classifier.js';
