@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>OKO Embed Demo</title>
+  <style>
+    body { margin: 0; background: #1a1a1e; color: #fff; font-family: system-ui; }
+    .container { max-width: 800px; margin: 0 auto; padding: 20px; }
+    h1 { font-size: 18px; font-weight: 400; color: #888; margin-bottom: 20px; }
+    .player { width: 100%; border-radius: 8px; overflow: hidden; }
+    pre { background: #111; padding: 12px; border-radius: 6px; font-size: 12px; color: #aaa; overflow-x: auto; }
+    code { color: #00d4aa; }
+    .btns { display: flex; gap: 8px; margin: 12px 0; flex-wrap: wrap; }
+    .btns button { background: #222; border: 1px solid #444; color: #ccc; padding: 6px 14px; border-radius: 4px; cursor: pointer; font-size: 13px; }
+    .btns button:hover { background: #333; color: #fff; }
+    .btns button.active { border-color: #00d4aa; color: #00d4aa; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>OKO Embed Player Demo</h1>
+    <div id="cam" class="player"></div>
+    <div class="btns" id="cam-btns"></div>
+    <p style="font-size: 13px; color: #666;">
+      Click = mute/unmute · Double-click = fullscreen · ESC = exit
+    </p>
+  </div>
+
+  <script src="oko-embed.js"></script>
+  <script>
+    var cams = ['M1','M5','M8','M10','M11','M15','D3','D14','D22'];
+    var player = OkoEmbed.create('#cam', {
+      webrtcUrl: '/api/webrtc?src=' + cams[0],
+      wsUrl:     '/api/ws?src=' + cams[0],
+      snapshot:  '/backend/snapshot/' + cams[0],
+    });
+
+    var btns = document.getElementById('cam-btns');
+    cams.forEach(function(id, i) {
+      var btn = document.createElement('button');
+      btn.textContent = id;
+      if (i === 0) btn.className = 'active';
+      btn.onclick = function() {
+        btns.querySelectorAll('button').forEach(function(b) { b.className = ''; });
+        btn.className = 'active';
+        player.switch({
+          webrtcUrl: '/api/webrtc?src=' + id,
+          wsUrl:     '/api/ws?src=' + id,
+          snapshot:  '/backend/snapshot/' + id,
+        });
+      };
+      btns.appendChild(btn);
+    });
+  </script>
+</body>
+</html>

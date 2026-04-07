@@ -1,5 +1,7 @@
 # Electron Desktop App — Architecture
 
+> **Status: FUTURE PLAN** — Not implemented. This document describes the planned Electron desktop app architecture. The current version is Docker-only.
+
 ## Цель
 
 Standalone desktop-приложение OKO NVR для Windows/Linux/macOS.

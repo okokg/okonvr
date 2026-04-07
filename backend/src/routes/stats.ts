@@ -4,6 +4,7 @@ import { FastifyInstance } from 'fastify';
 import { registry } from '../services/camera-registry';
 import { getNvrStatuses } from '../services/nvr-health';
 import { getGo2rtcApi } from '../services/stream-manager';
+import { wsHubStats } from '../services/ws-hub';
 
 let prevCpuUsage = process.cpuUsage();
 let prevCpuTime = Date.now();
@@ -134,7 +135,7 @@ export async function statsRoutes(fastify: FastifyInstance) {
         uptime: `${Math.round(process.uptime() / 60)}m`,
       };
 
-      return { streams: { total: streamNames.length, sd, hd, playback, transcode }, nvrs, active, system };
+      return { streams: { total: streamNames.length, sd, hd, playback, transcode }, nvrs, active, system, ws: wsHubStats() };
     } catch (err: any) {
       return { error: err.message };
     }

@@ -3,7 +3,10 @@ CLAUDE.md
 HUMAN.md
 node_modules/
 dist/
+monitor/
+nginx/.htpasswd
 *.db
+*.sh
 oko.yaml
 .env
 .htpasswd

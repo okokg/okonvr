@@ -1,0 +1,16 @@
+# ── Jetson: JetPack base with CUDA + TensorRT pre-installed ──
+# Build: docker build -f Dockerfile.jetson -t oko-detect .
+# Run: docker run --runtime nvidia --gpus all oko-detect
+
+FROM nvcr.io/nvidia/l4t-ml:r36.4.0-py3
+
+# ultralytics + deps
+RUN pip3 install --no-cache-dir \
+    ultralytics>=8.2 \
+    Pillow>=10.0
+
+WORKDIR /app
+COPY detector.py .
+
+EXPOSE 3001
+CMD ["python3", "detector.py"]

@@ -1,0 +1,1 @@
+../../packages/oko-player/src/embed/oko-embed.js

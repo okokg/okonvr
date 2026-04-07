@@ -11,7 +11,7 @@
  */
 
 import { ApiClient, CameraGrid, CameraView, CamPlayer } from './oko-player/index.js';
-import { QualityFeature, PlaybackFeature, ZoomFeature, TalkbackFeature, WatchMode } from './oko-player/index.js';
+import { QualityFeature, PlaybackFeature, ZoomFeature, TalkbackFeature, WatchMode, ObjectClassifier } from './oko-player/index.js';
 import { NotificationManager } from './notifications.js';
 import { SEARCH_DEBOUNCE_MS, VERSION } from './oko-player/config.js';
 
@@ -142,13 +142,18 @@ export class App {
         .map(a => `${a.name}[${a.producers}→${a.consumers}]`)
         .join(' ');
 
+      // Detect WS stats
+      const dws = s.detectWs;
+      const detectPart = dws && dws.clients > 0 ? ` | detect: ${dws.clients}ws` : '';
+
       console.log(
         `%c[server]%c ` +
         `cpu:${sys.host_cpu || '?'} load:${sys.load} mem:${sys.host_mem} | ` +
         `backend: cpu=${sys.backend_cpu} rss=${sys.backend_rss} heap=${sys.backend_heap} up=${sys.uptime} | ` +
         `streams: ${st.sd}sd ${st.hd}hd ${st.playback}pb ${st.transcode}tc | ` +
         `NVR: ${nvrParts.join(' ')}` +
-        (activeParts ? ` | ${activeParts}` : ''),
+        (activeParts ? ` | ${activeParts}` : '') +
+        detectPart,
         'color: #00d4aa; font-weight: bold',
         'color: inherit'
       );
@@ -806,6 +811,9 @@ export class App {
       } else {
         this.watchMode.updateCameras(this.grid.cameras);
         this.watchMode.gridElement = this.grid.gridEl;
+        // Enable "Detected only" by default
+        if (filterCb) filterCb.checked = true;
+        this.watchMode.motionFilter = true;
         this.watchMode.start();
         btn.classList.add('active');
         if (aiStatus) { aiStatus.textContent = 'loading...'; aiStatus.className = 'watch-ai-status'; }
@@ -851,6 +859,37 @@ export class App {
     // Store AI status element for later update
     this._watchAiStatus = aiStatus;
 
+    // ── Model selector ──
+    const modelSelect = document.getElementById('watch-model-select');
+    this._watchModelSelect = modelSelect;
+
+    // Populate model list from backend
+    this._populateModelSelect();
+
+    // Handle model change
+    modelSelect?.addEventListener('change', async () => {
+      const val = modelSelect.value;
+      if (!this.watchMode) return;
+      if (aiStatus) { aiStatus.textContent = 'loading...'; aiStatus.className = 'watch-ai-status'; }
+
+      // Get metadata from selected option
+      const opt = modelSelect.selectedOptions[0];
+      let meta = {};
+      try { meta = JSON.parse(opt?.dataset.meta || '{}'); } catch {}
+
+      const classifier = this.watchMode._classifier;
+      const ok = await classifier.loadModel(val, meta);
+      if (aiStatus) {
+        if (ok) {
+          aiStatus.textContent = classifier.modelName || 'ready';
+          aiStatus.className = 'watch-ai-status ready';
+        } else {
+          aiStatus.textContent = 'failed';
+          aiStatus.className = 'watch-ai-status error';
+        }
+      }
+    });
+
     // Prevent popup clicks from closing it
     popup?.addEventListener('click', (e) => e.stopPropagation());
 
@@ -861,6 +900,39 @@ export class App {
         this._watchPopupOpen = false;
       }
     });
+  }
+
+  /** Fetch model list from backend and populate the select. */
+  async _populateModelSelect() {
+    const sel = this._watchModelSelect;
+    if (!sel) return;
+    try {
+      const { models, builtin } = await ObjectClassifier.listModels();
+      sel.innerHTML = '';
+      const opt0 = document.createElement('option');
+      opt0.value = 'mediapipe';
+      opt0.textContent = builtin?.name || 'EfficientDet (CDN)';
+      sel.appendChild(opt0);
+
+      for (const m of models) {
+        const opt = document.createElement('option');
+        opt.value = m.name;
+        // Use description from ONNX metadata if available
+        const desc = m.meta?.description;
+        const shortDesc = desc
+          ? desc.replace(/Ultralytics /i, '').replace(/ model.*$/i, '').trim()
+          : m.name.replace(/[._]opset[=_]?\d+/i, '').replace(/\.onnx$/i, '');
+        opt.textContent = `${shortDesc} (${m.sizeHuman})`;
+        // Store metadata for later use
+        opt.dataset.meta = JSON.stringify(m.meta || {});
+        sel.appendChild(opt);
+      }
+      if (models.length > 0) {
+        console.log(`[app] AI models: ${models.length} available (${models.map(m => m.name).join(', ')})`);
+      }
+    } catch (e) {
+      console.warn('[app] Failed to load model list:', e);
+    }
   }
 
   /** Called after grid.build() — create WatchMode instance with cameras. */
@@ -875,8 +947,20 @@ export class App {
     this.watchMode.onClassifierReady = (ok, error) => {
       if (!aiStatus) return;
       if (ok) {
-        aiStatus.textContent = 'ready';
+        const eng = this.watchMode._classifier?.engine;
+        aiStatus.textContent = this.watchMode._classifier?.modelName || 'ready';
         aiStatus.className = 'watch-ai-status ready';
+        // Sync model select to current engine
+        const sel = this._watchModelSelect;
+        if (sel && this.watchMode._classifier) {
+          const name = this.watchMode._classifier.modelName;
+          if (name) {
+            for (const opt of sel.options) {
+              if (opt.value === 'mediapipe' && this.watchMode._classifier.engine === 'mediapipe') { sel.value = 'mediapipe'; break; }
+              if (opt.textContent.startsWith(name)) { sel.value = opt.value; break; }
+            }
+          }
+        }
       } else {
         aiStatus.textContent = error || 'failed';
         aiStatus.className = 'watch-ai-status error';
@@ -1450,6 +1534,11 @@ export class App {
     }
 
     this.grid.enterInvestigationMode();
+
+    // Update watch mode to use only investigation cameras
+    if (this.watchMode?.isActive) {
+      this.watchMode.updateCameras(this.grid.cameras);
+    }
     const startBtn = document.querySelector('.selection-badge .sel-start');
     if (startBtn) startBtn.remove();
     const countEl = document.querySelector('.selection-badge .sel-count');
@@ -1547,6 +1636,12 @@ export class App {
 
     // 5. Restart all cameras with staggered start
     this.grid.applyFilters();
+
+    // Update watch mode to use all cameras again
+    if (this.watchMode?.isActive) {
+      this.watchMode.updateCameras(this.grid.cameras);
+    }
+
     this._showHint('Investigation ended');
   }
 

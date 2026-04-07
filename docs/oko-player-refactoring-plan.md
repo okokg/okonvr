@@ -1,5 +1,7 @@
 # oko-player — План разреза camera-view.js
 
+> **Status: COMPLETED** — This refactoring has been fully implemented. The monolithic `camera-view.js` (3159 lines) has been split into `packages/oko-player/src/` with `core/`, `features/`, and `services/` directories. This document is kept for historical reference.
+
 ## Карта текущего файла (3159 строк)
 
 ```

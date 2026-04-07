@@ -7,10 +7,12 @@ services:
     environment:
       - SERVER_IP=${SERVER_IP}
       - WEBRTC_PORT=${WEBRTC_PORT:-8555}
+      - DETECT_URL=http://detect:3001
     volumes:
       - backend-data:/data
       - go2rtc-config:/config/go2rtc
       - ./oko.yaml:/config/oko.yaml:ro
+      - ./models:/models:ro
 
   # 2. go2rtc reads auto-generated config from shared volume
   go2rtc:
@@ -20,6 +22,7 @@ services:
     ports:
       - "${WEBRTC_PORT:-8555}:${WEBRTC_PORT:-8555}/tcp"
       - "${WEBRTC_PORT:-8555}:${WEBRTC_PORT:-8555}/udp"
+      - "127.0.0.1:1984:1984"
     volumes:
       - go2rtc-config:/config
     depends_on:
@@ -40,7 +43,6 @@ services:
     depends_on:
       - backend
       - go2rtc
-    # Fix Docker bind mount quirk: if .htpasswd is a directory, replace with default file
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
@@ -54,6 +56,32 @@ services:
           echo 'demo:$$apr1$$default$$pljh2huX5l.Y7gWwKFSFB0' > /etc/nginx/.htpasswd
         fi
         exec nginx -g 'daemon off;'
+
+  # 4. oko-detect — server-side AI detection (Google Coral TPU)
+  #    Optional: only starts with `docker compose --profile coral up -d`
+  #    Without Coral, frontend uses browser-side WASM detection (MediaPipe).
+  #    Place .tflite models in ./models/
+  detect:
+    build: ./detect
+    container_name: oko-detect
+    profiles: ["coral"]
+    restart: on-failure:3
+    privileged: true
+    entrypoint: ["/bin/bash", "/app/entrypoint.sh"]
+    devices:
+      - "/dev/bus/usb:/dev/bus/usb"
+    volumes:
+      - ./models:/models:ro
+      - ./detect/detector.py:/app/detector.py:ro
+      - ./detect/entrypoint.sh:/app/entrypoint.sh:ro
+    environment:
+      - GO2RTC_RTSP=rtsp://go2rtc:8554
+      - GO2RTC_URL=http://go2rtc:1984
+      - MAX_FPS=15
+      - CONF_THRESH=0.3
+      - CORAL_DEVICE=0
+    depends_on:
+      - go2rtc
 
 volumes:
   backend-data:

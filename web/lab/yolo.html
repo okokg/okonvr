@@ -1,0 +1,685 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OKO — YOLO Detection Lab</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #0a0a0c; color: #e0e0e4; font-family: -apple-system, sans-serif; }
+.toolbar {
+  display: flex; align-items: center; gap: 10px; padding: 8px 14px;
+  background: #111; border-bottom: 1px solid #222; flex-wrap: wrap;
+}
+.toolbar h1 { font-size: 14px; font-weight: 500; color: #888; }
+.toolbar select, .toolbar button {
+  background: #1a1a1e; color: #e0e0e4; border: 1px solid #333;
+  border-radius: 4px; padding: 4px 10px; font-size: 12px; cursor: pointer;
+}
+.toolbar button:hover { background: #252528; }
+.toolbar button.active { background: rgba(255,71,87,0.15); border-color: rgba(255,71,87,0.4); color: #ff4757; }
+.status { font-size: 11px; font-family: monospace; }
+.status.ok { color: #00d4aa; }
+.status.err { color: #ff4757; }
+.status.warn { color: #ffa502; }
+
+.main { display: flex; gap: 12px; padding: 12px; height: calc(100vh - 46px); }
+.video-wrap { flex: 1; position: relative; background: #000; border-radius: 6px; overflow: hidden; }
+.video-wrap video { width: 100%; height: 100%; object-fit: contain; }
+.video-wrap canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; object-fit: contain; }
+
+.side { width: 280px; flex-shrink: 0; display: flex; flex-direction: column; gap: 8px; overflow-y: auto; }
+.panel { background: #111; border: 1px solid #222; border-radius: 6px; padding: 10px 14px; }
+.panel-t { font-size: 10px; color: #555; text-transform: uppercase; margin-bottom: 8px; letter-spacing: 0.5px; }
+.stats { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.st { background: #1a1a1e; border-radius: 4px; padding: 6px 10px; }
+.st-l { color: #555; font-size: 9px; }
+.st-v { color: #e0e0e4; font-size: 15px; font-weight: 500; font-family: monospace; }
+
+.ctrl label { display: flex; align-items: center; gap: 6px; font-size: 11px; color: #aaa; margin: 4px 0; }
+.ctrl input[type=range] { flex: 1; accent-color: #ff4757; }
+.ctrl input[type=checkbox] { accent-color: #ff4757; }
+.ctrl select { background: #1a1a1e; color: #e0e0e4; border: 1px solid #333; border-radius: 3px; padding: 2px 6px; font-size: 11px; }
+
+.log { flex: 1; overflow-y: auto; font-family: monospace; font-size: 10px; line-height: 1.5; color: #666; max-height: 200px; }
+.log .h { color: #ff4757; } .log .v { color: #ffa502; } .log .i { color: #00d4aa; }
+
+.model-drop { border: 2px dashed #333; border-radius: 6px; padding: 16px; text-align: center; font-size: 11px; color: #555; cursor: pointer; transition: border-color 0.2s; }
+.model-drop:hover, .model-drop.over { border-color: #ff4757; color: #aaa; }
+.model-drop input { display: none; }
+
+.tracks-list { font-family: monospace; font-size: 10px; max-height: 120px; overflow-y: auto; }
+.track-row { display: flex; align-items: center; gap: 6px; padding: 2px 0; }
+.track-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+</style>
+</head>
+<body>
+
+<div class="toolbar">
+  <h1>OKO YOLO Lab</h1>
+  <select id="cam-sel"><option>Loading...</option></select>
+  <div style="display:flex;gap:0">
+    <button id="sd-btn" class="active" style="border-radius:4px 0 0 4px;font-size:11px;padding:4px 8px">SD</button>
+    <button id="hd-btn" style="border-radius:0 4px 4px 0;font-size:11px;padding:4px 8px;border-left:0">HD</button>
+  </div>
+  <button id="go-btn">Start</button>
+  <button id="stop-btn" style="display:none">Stop</button>
+  <span class="status" id="model-st">Model: not loaded</span>
+  <span style="flex:1"></span>
+  <span class="status" id="fps-st">—</span>
+</div>
+
+<div class="main">
+  <div class="video-wrap">
+    <video id="vid" autoplay muted playsinline></video>
+    <canvas id="ovl"></canvas>
+  </div>
+  <div class="side">
+    <div class="panel">
+      <div class="panel-t">Model</div>
+      <div class="model-drop" id="model-drop">
+        <div style="margin-bottom:8px">Drop <b>yolov8n.onnx</b> here or click to browse</div>
+        <button onclick="document.getElementById('model-file').click()" style="background:#1a1a1e;color:#e0e0e4;border:1px solid #444;border-radius:4px;padding:6px 16px;font-size:12px;cursor:pointer">Choose .onnx file</button>
+        <input type="file" id="model-file" accept=".onnx">
+        <div id="model-progress" style="margin-top:8px;font-size:10px;color:#666"></div>
+      </div>
+      <div style="margin-top:6px;font-size:10px;color:#555">
+        Download: <a href="https://huggingface.co/SpotLab/YOLOv8Detection/resolve/main/yolov8n.onnx" style="color:#378ADD" target="_blank">yolov8n.onnx (12.8MB)</a><br>
+        Or export: <code style="color:#888">yolo export model=yolov8n.pt format=onnx opset=13</code>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="panel-t">Stats</div>
+      <div class="stats">
+        <div class="st"><div class="st-l">Objects</div><div class="st-v" id="s-obj">0</div></div>
+        <div class="st"><div class="st-l">Tracks</div><div class="st-v" id="s-trk">0</div></div>
+        <div class="st"><div class="st-l">Inference</div><div class="st-v" id="s-inf">—</div></div>
+        <div class="st"><div class="st-l">FPS</div><div class="st-v" id="s-fps">—</div></div>
+        <div class="st"><div class="st-l">Resolution</div><div class="st-v" id="s-res" style="font-size:10px">—</div></div>
+        <div class="st"><div class="st-l">Humans</div><div class="st-v" id="s-hum" style="color:#ff4757">0</div></div>
+        <div class="st"><div class="st-l">Vehicles</div><div class="st-v" id="s-veh" style="color:#ffa502">0</div></div>
+        <div class="st"><div class="st-l">Other</div><div class="st-v" id="s-oth">0</div></div>
+      </div>
+    </div>
+    <div class="panel ctrl">
+      <div class="panel-t">Settings</div>
+      <label><span style="min-width:70px">Confidence</span>
+        <input type="range" id="conf" min="0.1" max="0.9" value="0.35" step="0.05">
+        <span id="conf-v" style="min-width:30px;text-align:right;font-family:monospace">0.35</span>
+      </label>
+      <label><span style="min-width:70px">IoU NMS</span>
+        <input type="range" id="iou" min="0.1" max="0.9" value="0.45" step="0.05">
+        <span id="iou-v" style="min-width:30px;text-align:right;font-family:monospace">0.45</span>
+      </label>
+      <label><input type="checkbox" id="show-box" checked> Bounding boxes</label>
+      <label><input type="checkbox" id="show-label" checked> Labels + confidence</label>
+      <label><input type="checkbox" id="show-track" checked> Track IDs + trails</label>
+      <label>
+        <span style="min-width:70px">Filter</span>
+        <select id="cls-filter">
+          <option value="all">All classes</option>
+          <option value="surveillance" selected>Surveillance (person/vehicle/animal)</option>
+          <option value="person">Person only</option>
+          <option value="vehicle">Vehicle only</option>
+        </select>
+      </label>
+    </div>
+    <div class="panel" style="flex:1;display:flex;flex-direction:column">
+      <div class="panel-t">Active tracks</div>
+      <div class="tracks-list" id="tracks"></div>
+      <div class="panel-t" style="margin-top:8px">Log</div>
+      <div class="log" id="log"></div>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.22.0/dist/ort.min.js"></script>
+<script>
+// Configure ORT: use only wasm backend (webgl doesn't support all ops)
+ort.env.wasm.numThreads = navigator.hardwareConcurrency || 4;
+ort.env.wasm.simd = true;
+// ── COCO classes ──
+const COCO = ["person","bicycle","car","motorcycle","airplane","bus","train","truck","boat","traffic light","fire hydrant","stop sign","parking meter","bench","bird","cat","dog","horse","sheep","cow","elephant","bear","zebra","giraffe","backpack","umbrella","handbag","tie","suitcase","frisbee","skis","snowboard","sports ball","kite","baseball bat","baseball glove","skateboard","surfboard","tennis racket","bottle","wine glass","cup","fork","knife","spoon","bowl","banana","apple","sandwich","orange","broccoli","carrot","hot dog","pizza","donut","cake","chair","couch","potted plant","bed","dining table","toilet","tv","laptop","mouse","remote","keyboard","cell phone","microwave","oven","toaster","sink","refrigerator","book","clock","vase","scissors","teddy bear","hair drier","toothbrush"];
+
+const SURV_CLASSES = new Set([0,1,2,3,5,7,14,15,16,17]); // person,bicycle,car,motorcycle,bus,truck,bird,cat,dog,horse
+const PERSON_CLASSES = new Set([0]);
+const VEHICLE_CLASSES = new Set([1,2,3,5,7]);
+const HUMAN_IDS = new Set([0]);
+const VEHICLE_IDS = new Set([1,2,3,5,7]);
+
+const TRACK_COLORS = ['#ff4757','#ffa502','#00d4aa','#378ADD','#ff6b81','#7f77dd','#ffc048','#5dca8c','#d4537e','#85b7eb','#e24b4a','#97c459'];
+
+// ── State ──
+let session = null;
+let modelReady = false;
+let modelInputName = 'images';
+let modelOutputName = 'output0';
+let running = false;
+let useHd = false;
+let currentPc = null;
+let currentHd = null;
+let frameCount = 0;
+let fpsTimer = 0;
+let lastTs = 0;
+
+// ── DOM ──
+const vid = document.getElementById('vid');
+const canvas = document.getElementById('ovl');
+const ctx = canvas.getContext('2d');
+const logEl = document.getElementById('log');
+
+function addLog(msg, cls='') {
+  const d = document.createElement('div');
+  if (cls) d.className = cls;
+  d.textContent = `[${new Date().toTimeString().slice(0,8)}] ${msg}`;
+  logEl.prepend(d);
+  if (logEl.children.length > 80) logEl.lastChild.remove();
+}
+
+// ── Model loading ──
+const dropZone = document.getElementById('model-drop');
+const fileInput = document.getElementById('model-file');
+
+dropZone.addEventListener('click', () => fileInput.click());
+dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('over'); });
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('over'));
+dropZone.addEventListener('drop', e => { e.preventDefault(); dropZone.classList.remove('over'); loadModelFile(e.dataTransfer.files[0]); });
+fileInput.addEventListener('change', () => { if (fileInput.files[0]) loadModelFile(fileInput.files[0]); });
+
+async function loadModelFile(file) {
+  const st = document.getElementById('model-st');
+  const prog = document.getElementById('model-progress');
+  st.textContent = `Model: loading ${file.name} (${(file.size/1e6).toFixed(1)}MB)...`;
+  st.className = 'status warn';
+  prog.textContent = 'Reading file...';
+  addLog(`Loading ${file.name}...`, 'i');
+
+  try {
+    const buf = await file.arrayBuffer();
+    prog.textContent = 'Creating inference session (WASM)...';
+    session = await ort.InferenceSession.create(buf, {
+      executionProviders: ['wasm'],
+    });
+
+    // Detect input/output names
+    const inputName = session.inputNames[0];
+    const outputName = session.outputNames[0];
+    modelInputName = inputName;
+    modelOutputName = outputName;
+
+    modelReady = true;
+    st.textContent = `Model: ${file.name} ready`;
+    st.className = 'status ok';
+    prog.textContent = `Input: ${inputName} | Output: ${outputName}`;
+    dropZone.querySelector('div').innerHTML = `<b>${file.name}</b> loaded (${(file.size/1e6).toFixed(1)}MB)`;
+    addLog(`Model ready — in: ${inputName}, out: ${outputName}`, 'i');
+  } catch (e) {
+    st.textContent = `Model: ${e.message}`;
+    st.className = 'status err';
+    prog.textContent = '';
+    addLog(`Model error: ${e.message}`, 'h');
+  }
+}
+
+// ── Camera connection ──
+async function loadCameras() {
+  try {
+    const res = await fetch('/backend/cameras');
+    const cams = await res.json();
+    const sel = document.getElementById('cam-sel');
+    sel.innerHTML = '';
+    for (const c of cams) {
+      const o = document.createElement('option');
+      o.value = c.id; o.textContent = `${c.id} — ${c.label||c.name||''}`;
+      sel.appendChild(o);
+    }
+    addLog(`${cams.length} cameras`, 'i');
+  } catch(e) { addLog(`Camera load failed: ${e.message}`, 'h'); }
+}
+
+async function connectCamera(camId) {
+  if (currentPc) { currentPc.close(); currentPc = null; }
+  if (currentHd) { fetch(`/backend/hd-stream/${encodeURIComponent(currentHd)}`,{method:'DELETE'}).catch(()=>{}); currentHd = null; }
+  vid.srcObject = null;
+  let src = camId;
+  if (useHd) {
+    try {
+      const r = await fetch('/backend/hd-stream',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({camera:camId})});
+      if (r.ok) { const d = await r.json(); src = d.stream; currentHd = camId; addLog(`HD: ${src}`, 'i'); }
+    } catch(e) { addLog(`HD fail: ${e.message}`, 'h'); }
+  }
+  try {
+    const pc = new RTCPeerConnection({iceServers:[]}); currentPc = pc;
+    pc.addTransceiver('video',{direction:'recvonly'});
+    pc.ontrack = e => { vid.srcObject = e.streams[0]; };
+    const offer = await pc.createOffer(); await pc.setLocalDescription(offer);
+    const r = await fetch(`/api/webrtc?src=${src}`,{method:'POST',body:offer.sdp});
+    await pc.setRemoteDescription({type:'answer',sdp:await r.text()});
+    addLog(`Connected ${src} (${useHd?'HD':'SD'})`, 'i');
+  } catch(e) { addLog(`WebRTC fail: ${e.message}`, 'h'); }
+}
+
+// ── YOLOv8 preprocessing (letterbox — pad to square, maintain aspect ratio) ──
+let letterboxParams = { scale: 1, padX: 0, padY: 0 }; // shared with postprocess
+
+function preprocess(video, size=640) {
+  const vw = video.videoWidth, vh = video.videoHeight;
+  const scale = Math.min(size / vw, size / vh);
+  const nw = Math.round(vw * scale), nh = Math.round(vh * scale);
+  const padX = (size - nw) / 2, padY = (size - nh) / 2;
+
+  // Save for postprocess
+  letterboxParams = { scale, padX, padY };
+
+  const c = new OffscreenCanvas(size, size);
+  const cx = c.getContext('2d');
+  // Fill with gray (114/255 = YOLO standard pad color)
+  cx.fillStyle = '#727272';
+  cx.fillRect(0, 0, size, size);
+  // Draw video centered with preserved aspect ratio
+  cx.drawImage(video, padX, padY, nw, nh);
+
+  const imgData = cx.getImageData(0, 0, size, size).data;
+  const float32 = new Float32Array(3 * size * size);
+  for (let i = 0; i < size * size; i++) {
+    float32[i] = imgData[i * 4] / 255;
+    float32[size * size + i] = imgData[i * 4 + 1] / 255;
+    float32[2 * size * size + i] = imgData[i * 4 + 2] / 255;
+  }
+  return new ort.Tensor('float32', float32, [1, 3, size, size]);
+}
+
+// ── YOLOv8 postprocessing + NMS ──
+function postprocess(output, imgW, imgH, confThresh, iouThresh, classFilter) {
+  const data = output.data; // [1, 84, 8400] flattened
+  const rows = 84, cols = 8400;
+  const boxes = [];
+  const { scale, padX, padY } = letterboxParams;
+
+  for (let i = 0; i < cols; i++) {
+    let maxProb = 0, maxCls = 0;
+    for (let c = 4; c < rows; c++) {
+      const p = data[c * cols + i];
+      if (p > maxProb) { maxProb = p; maxCls = c - 4; }
+    }
+    if (maxProb < confThresh) continue;
+
+    if (classFilter === 'surveillance' && !SURV_CLASSES.has(maxCls)) continue;
+    if (classFilter === 'person' && !PERSON_CLASSES.has(maxCls)) continue;
+    if (classFilter === 'vehicle' && !VEHICLE_CLASSES.has(maxCls)) continue;
+
+    // Box coords are in 640×640 letterboxed space
+    const cx = data[0 * cols + i];
+    const cy = data[1 * cols + i];
+    const w  = data[2 * cols + i];
+    const h  = data[3 * cols + i];
+
+    // Remove padding, then scale back to original video resolution
+    const x1 = (cx - w/2 - padX) / scale;
+    const y1 = (cy - h/2 - padY) / scale;
+    const bw = w / scale;
+    const bh = h / scale;
+
+    boxes.push({ x: x1, y: y1, w: bw, h: bh, cls: maxCls, prob: maxProb });
+  }
+
+  return nms(boxes, iouThresh);
+}
+
+function nms(boxes, iouThresh) {
+  boxes.sort((a, b) => b.prob - a.prob);
+  const keep = [];
+  const used = new Set();
+  for (let i = 0; i < boxes.length; i++) {
+    if (used.has(i)) continue;
+    keep.push(boxes[i]);
+    for (let j = i + 1; j < boxes.length; j++) {
+      if (used.has(j)) continue;
+      if (boxes[i].cls === boxes[j].cls && iou(boxes[i], boxes[j]) > iouThresh) {
+        used.add(j);
+      }
+    }
+  }
+  return keep;
+}
+
+function iou(a, b) {
+  const x1 = Math.max(a.x, b.x), y1 = Math.max(a.y, b.y);
+  const x2 = Math.min(a.x + a.w, b.x + b.w), y2 = Math.min(a.y + a.h, b.y + b.h);
+  const inter = Math.max(0, x2 - x1) * Math.max(0, y2 - y1);
+  const union = a.w * a.h + b.w * b.h - inter;
+  return union > 0 ? inter / union : 0;
+}
+
+// ── ByteTrack-style Tracker with Kalman prediction ──
+let nextTrackId = 1;
+let tracks = [];
+const MAX_AGE = 60;      // frames without match before removal (with prediction)
+const TRAIL_LEN = 60;
+const MIN_HITS = 2;       // min detections before track is "confirmed"
+const HIGH_THRESH = 0.4;  // first-pass threshold
+const LOW_THRESH = 0.15;  // second-pass (rescue low-conf detections)
+
+class Track {
+  constructor(det) {
+    this.id = nextTrackId++;
+    this.cls = det.cls;
+    this.prob = det.prob;
+    this.color = TRACK_COLORS[(this.id - 1) % TRACK_COLORS.length];
+    this.hits = 1;
+    this.age = 0;            // frames since last matched detection
+    this.confirmed = false;
+
+    // State: [cx, cy, w, h, vx, vy, vw, vh]
+    const cx = det.x + det.w / 2, cy = det.y + det.h / 2;
+    this.state = [cx, cy, det.w, det.h, 0, 0, 0, 0];
+    this.trail = [[cx, cy]];
+  }
+
+  /** Predict next position using velocity. */
+  predict() {
+    const s = this.state;
+    s[0] += s[4]; // cx += vx
+    s[1] += s[5]; // cy += vy
+    s[2] += s[6]; // w += vw
+    s[3] += s[7]; // h += vh
+    // Dampen velocity slightly (friction)
+    s[4] *= 0.95; s[5] *= 0.95; s[6] *= 0.9; s[7] *= 0.9;
+    // Clamp size
+    s[2] = Math.max(s[2], 5);
+    s[3] = Math.max(s[3], 5);
+    this.age++;
+  }
+
+  /** Update with matched detection. */
+  update(det) {
+    const s = this.state;
+    const cx = det.x + det.w / 2, cy = det.y + det.h / 2;
+    // Smooth velocity update (exponential moving average)
+    const alpha = 0.4;
+    s[4] = s[4] * (1 - alpha) + (cx - s[0]) * alpha;
+    s[5] = s[5] * (1 - alpha) + (cy - s[1]) * alpha;
+    s[6] = s[6] * (1 - alpha) + (det.w - s[2]) * alpha;
+    s[7] = s[7] * (1 - alpha) + (det.h - s[3]) * alpha;
+    // Update position
+    s[0] = cx; s[1] = cy; s[2] = det.w; s[3] = det.h;
+    this.cls = det.cls;
+    this.prob = det.prob;
+    this.age = 0;
+    this.hits++;
+    if (this.hits >= MIN_HITS) this.confirmed = true;
+    this.trail.push([cx, cy]);
+    if (this.trail.length > TRAIL_LEN) this.trail.shift();
+  }
+
+  /** Get predicted bounding box. */
+  get box() {
+    const [cx, cy, w, h] = this.state;
+    return { x: cx - w / 2, y: cy - h / 2, w, h, cls: this.cls, prob: this.prob };
+  }
+
+  /** Is this track actively being detected? */
+  get isActive() { return this.age === 0; }
+
+  /** Is this track coasting on prediction? */
+  get isPredicted() { return this.age > 0 && this.age < MAX_AGE; }
+}
+
+/** Compute cost matrix (1 - IoU) between tracks and detections. */
+function costMatrix(trackList, detList) {
+  const costs = [];
+  for (const trk of trackList) {
+    const row = [];
+    for (const det of detList) {
+      row.push(1 - iou(trk.box, det));
+    }
+    costs.push(row);
+  }
+  return costs;
+}
+
+/** Greedy matching: returns [[trkIdx, detIdx], ...] */
+function greedyMatch(costs, threshold) {
+  const matches = [];
+  const usedT = new Set(), usedD = new Set();
+  // Build flat list of all costs
+  const pairs = [];
+  for (let t = 0; t < costs.length; t++) {
+    for (let d = 0; d < costs[0].length; d++) {
+      if (costs[t][d] < threshold) pairs.push([costs[t][d], t, d]);
+    }
+  }
+  pairs.sort((a, b) => a[0] - b[0]); // best matches first
+  for (const [, t, d] of pairs) {
+    if (usedT.has(t) || usedD.has(d)) continue;
+    matches.push([t, d]);
+    usedT.add(t); usedD.add(d);
+  }
+  return matches;
+}
+
+function updateTracks(detections, highThresh = HIGH_THRESH) {
+  // 1. Predict all tracks
+  for (const trk of tracks) trk.predict();
+
+  // 2. Split detections into high and low confidence
+  const highDets = [], lowDets = [];
+  for (const d of detections) {
+    if (d.prob >= highThresh) highDets.push(d);
+    else lowDets.push(d);
+  }
+
+  // 3. First pass: match high-conf detections to all tracks
+  const unmatchedTrks = new Set(tracks.map((_, i) => i));
+  const unmatchedHighDets = new Set(highDets.map((_, i) => i));
+
+  if (highDets.length > 0 && tracks.length > 0) {
+    const costs = costMatrix(tracks, highDets);
+    const matches = greedyMatch(costs, 0.7); // 1 - IoU < 0.7 → IoU > 0.3
+    for (const [t, d] of matches) {
+      tracks[t].update(highDets[d]);
+      unmatchedTrks.delete(t);
+      unmatchedHighDets.delete(d);
+    }
+  }
+
+  // 4. Second pass: match low-conf detections to remaining tracks (rescue)
+  const remainingTrks = [...unmatchedTrks].map(i => tracks[i]);
+  if (lowDets.length > 0 && remainingTrks.length > 0) {
+    const costs = costMatrix(remainingTrks, lowDets);
+    const matches = greedyMatch(costs, 0.7);
+    for (const [t, d] of matches) {
+      remainingTrks[t].update(lowDets[d]);
+      unmatchedTrks.delete(tracks.indexOf(remainingTrks[t]));
+    }
+  }
+
+  // 5. Update trail for predicted (unmatched) tracks
+  for (const idx of unmatchedTrks) {
+    const trk = tracks[idx];
+    if (trk.isPredicted) {
+      trk.trail.push([trk.state[0], trk.state[1]]);
+      if (trk.trail.length > TRAIL_LEN) trk.trail.shift();
+    }
+  }
+
+  // 6. Remove dead tracks
+  tracks = tracks.filter(t => t.age < MAX_AGE);
+
+  // 7. Create new tracks from unmatched high-conf detections
+  for (const idx of unmatchedHighDets) {
+    tracks.push(new Track(highDets[idx]));
+  }
+}
+
+// ── Rendering ──
+function draw() {
+  canvas.width = vid.videoWidth;
+  canvas.height = vid.videoHeight;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  const showBox = document.getElementById('show-box').checked;
+  const showLabel = document.getElementById('show-label').checked;
+  const showTrack = document.getElementById('show-track').checked;
+
+  for (const trk of tracks) {
+    if (!trk.confirmed) continue; // don't draw unconfirmed tracks
+    if (trk.age >= MAX_AGE) continue;
+    const b = trk.box;
+    const color = trk.color;
+    const predicted = trk.isPredicted;
+    const alpha = predicted ? Math.max(0.2, 1 - trk.age / MAX_AGE) : 1;
+
+    // Trail
+    if (showTrack && trk.trail.length > 1) {
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 2;
+      ctx.globalAlpha = alpha * 0.5;
+      ctx.beginPath();
+      ctx.moveTo(trk.trail[0][0], trk.trail[0][1]);
+      for (let i = 1; i < trk.trail.length; i++) {
+        ctx.lineTo(trk.trail[i][0], trk.trail[i][1]);
+      }
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+    }
+
+    // Box
+    if (showBox) {
+      ctx.strokeStyle = color;
+      ctx.lineWidth = predicted ? 1.5 : 2;
+      ctx.globalAlpha = alpha;
+      if (predicted) ctx.setLineDash([6, 4]);
+      ctx.strokeRect(b.x, b.y, b.w, b.h);
+      ctx.setLineDash([]);
+      ctx.globalAlpha = 1;
+    }
+
+    // Label
+    if (showLabel || showTrack) {
+      const parts = [];
+      if (showTrack) parts.push(`#${trk.id}`);
+      if (showLabel) parts.push(`${COCO[trk.cls]} ${Math.round(trk.prob * 100)}%`);
+      if (predicted) parts.push('(pred)');
+      const label = parts.join(' ');
+
+      ctx.font = '12px monospace';
+      const tw = ctx.measureText(label).width;
+      ctx.fillStyle = color;
+      ctx.globalAlpha = alpha * 0.75;
+      ctx.fillRect(b.x, b.y - 16, tw + 8, 16);
+      ctx.globalAlpha = alpha;
+      ctx.fillStyle = '#fff';
+      ctx.fillText(label, b.x + 4, b.y - 4);
+      ctx.globalAlpha = 1;
+    }
+  }
+
+  // Update tracks panel
+  const el = document.getElementById('tracks');
+  el.innerHTML = '';
+  const visible = tracks.filter(t => t.confirmed && t.age < MAX_AGE);
+  for (const t of visible) {
+    const row = document.createElement('div');
+    row.className = 'track-row';
+    const status = t.isActive ? '' : ` · pred ${t.age}f`;
+    row.innerHTML = `<div class="track-dot" style="background:${t.color};opacity:${t.isActive?1:0.4}"></div>
+      <span style="opacity:${t.isActive?1:0.5}">#${t.id} ${COCO[t.cls]} ${Math.round(t.prob*100)}% (${t.hits}f${status})</span>`;
+    el.appendChild(row);
+  }
+}
+
+// ── Detection loop ──
+async function detectLoop() {
+  if (!running || !modelReady) return;
+  if (vid.readyState < 2 || vid.videoWidth === 0) {
+    requestAnimationFrame(detectLoop);
+    return;
+  }
+
+  const confThresh = parseFloat(document.getElementById('conf').value);
+  const iouThresh = parseFloat(document.getElementById('iou').value);
+  const classFilter = document.getElementById('cls-filter').value;
+
+  const t0 = performance.now();
+  const input = preprocess(vid, 640);
+  const feeds = {};
+  feeds[modelInputName] = input;
+  const results = await session.run(feeds);
+  const output = results[modelOutputName];
+  const inferMs = Math.round(performance.now() - t0);
+
+  const internalThresh = Math.min(confThresh, LOW_THRESH);
+  const dets = postprocess(output, vid.videoWidth, vid.videoHeight, internalThresh, iouThresh, classFilter);
+  updateTracks(dets, confThresh);
+  updateTracks(dets);
+  draw();
+
+  // Stats
+  document.getElementById('s-obj').textContent = dets.length;
+  document.getElementById('s-trk').textContent = tracks.filter(t => t.confirmed && t.age < MAX_AGE).length;
+  document.getElementById('s-inf').textContent = `${inferMs}ms`;
+  document.getElementById('s-hum').textContent = tracks.filter(t => t.confirmed && t.isActive && HUMAN_IDS.has(t.cls)).length;
+  document.getElementById('s-veh').textContent = tracks.filter(t => t.confirmed && t.isActive && VEHICLE_IDS.has(t.cls)).length;
+  document.getElementById('s-oth').textContent = tracks.filter(t => t.confirmed && t.isActive && !HUMAN_IDS.has(t.cls) && !VEHICLE_IDS.has(t.cls)).length;
+
+  frameCount++;
+  if (performance.now() - fpsTimer > 1000) {
+    document.getElementById('s-fps').textContent = frameCount;
+    document.getElementById('fps-st').textContent = `${frameCount} FPS`;
+    document.getElementById('s-res').textContent = `${vid.videoWidth}x${vid.videoHeight}`;
+    frameCount = 0;
+    fpsTimer = performance.now();
+  }
+
+  requestAnimationFrame(detectLoop);
+}
+
+// ── Controls ──
+document.getElementById('conf').oninput = e => document.getElementById('conf-v').textContent = parseFloat(e.target.value).toFixed(2);
+document.getElementById('iou').oninput = e => document.getElementById('iou-v').textContent = parseFloat(e.target.value).toFixed(2);
+
+async function switchQuality(hd) {
+  useHd = hd;
+  document.getElementById('sd-btn').classList.toggle('active', !hd);
+  document.getElementById('hd-btn').classList.toggle('active', hd);
+  if (running) await connectCamera(document.getElementById('cam-sel').value);
+}
+document.getElementById('sd-btn').onclick = () => switchQuality(false);
+document.getElementById('hd-btn').onclick = () => switchQuality(true);
+
+document.getElementById('cam-sel').onchange = async () => {
+  if (running) await connectCamera(document.getElementById('cam-sel').value);
+};
+
+document.getElementById('go-btn').onclick = async () => {
+  if (!modelReady) { addLog('Load a model first', 'h'); return; }
+  running = true;
+  document.getElementById('go-btn').style.display = 'none';
+  document.getElementById('stop-btn').style.display = '';
+  tracks = []; nextTrackId = 1;
+  await connectCamera(document.getElementById('cam-sel').value);
+  addLog('Started', 'i');
+  detectLoop();
+};
+
+document.getElementById('stop-btn').onclick = () => {
+  running = false;
+  document.getElementById('go-btn').style.display = '';
+  document.getElementById('stop-btn').style.display = 'none';
+  if (currentPc) { currentPc.close(); currentPc = null; }
+  if (currentHd) { fetch(`/backend/hd-stream/${encodeURIComponent(currentHd)}`,{method:'DELETE'}).catch(()=>{}); currentHd = null; }
+  vid.srcObject = null;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  addLog('Stopped');
+};
+
+window.addEventListener('beforeunload', () => {
+  if (currentHd) fetch(`/backend/hd-stream/${encodeURIComponent(currentHd)}`,{method:'DELETE',keepalive:true}).catch(()=>{});
+});
+
+loadCameras();
+addLog('Drop yolov8n.onnx model to begin', 'i');
+</script>
+</body>
+</html>

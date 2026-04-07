@@ -14,7 +14,7 @@ import {
   ICE_GATHER_TIMEOUT_MS, STUN_SERVERS, BUFFER_MAX_SECONDS,
   BUFFER_TRIM_TO, WEBRTC_RETRY_MS, VIDEO_DECODE_CHECK_MS,
   MSE_OPEN_TIMEOUT_MS, STALE_STREAM_MS, MSE_CACHE_TTL_MS,
-} from '../config.js';
+} from './config.js';
 
 (window._oko = window._oko || {}).player = 'p6a0';
 
@@ -161,10 +161,6 @@ export class CamPlayer {
     this.connected = false;
     this._codecMismatch = false;  // true after codec mismatch 500 — use MSE only
 
-    // WebRTC recovery: when MSE fallback was due to network (not codec),
-    // periodically probe WebRTC to try switching back.
-    this._fallbackReason = null;  // 'codec' | 'network' | null
-
     // retry
     this._retryTimer = null;
     this._iceTimeout = null;
@@ -172,8 +168,6 @@ export class CamPlayer {
     this._videoDecodeCheck = null;
     this._videoDecodeAttempts = 0;
     this._webrtcRetried = false;
-    this._totalFailures = 0;       // consecutive failures across all protocols
-    this._dead = false;            // true = stop retrying entirely
     this.retryDelay = RETRY_BASE_MS;
 
     // bitrate + health tracking
@@ -221,8 +215,6 @@ export class CamPlayer {
       if (lastMse && (Date.now() - lastMse) < CamPlayer.MSE_CACHE_TTL) {
         console.log(`[player] ${this.name}: MSE cache hit for ${camId} (${Math.round((Date.now() - lastMse) / 1000)}s ago), skipping WebRTC`);
         this._codecMismatch = true;
-        // Preserve existing fallback reason (network or codec from previous session)
-        if (!this._fallbackReason) this._fallbackReason = 'network';
         this._connectMSE();
       } else {
         this._connectWebRTC();
@@ -239,8 +231,7 @@ export class CamPlayer {
 
   disable() {
     this.enabled = false;
-    CamPlayer._probeWaiters.delete(this);
-    CamPlayer._mseRelease(this);
+    CamPlayer._mseRelease(this); // release pool slot + remove from queue
     this.stop();
     this._emitStatus(false);
   }
@@ -329,13 +320,6 @@ export class CamPlayer {
     this.stop();
 
     this._connectStartTime = Date.now();
-
-    // Skip WebRTC entirely for cameras with persistent server errors
-    if (this._fallbackReason === 'server') {
-      this._connectMSE();
-      return;
-    }
-
     console.log(`[player] ${this.name}: connecting WebRTC...`);
     this.mode = 'webrtc';
     this._emitMode('webrtc');
@@ -371,7 +355,6 @@ export class CamPlayer {
         // Codec mismatch (e.g. H.265 source, no H.265 WebRTC)
         if (errorText.includes('codecs not matched')) {
           this._codecMismatch = true;
-          this._fallbackReason = 'codec';
           this._closePeerConnection();
           this._emitStage('codec fallback');
 
@@ -389,46 +372,27 @@ export class CamPlayer {
           return;
         }
 
-        // Session streams (__pb_*, __hd_*) may get 500/timeout while go2rtc creates RTSP
-        // Check BEFORE NVR error — NVR may just be slow with 4+ simultaneous RTSP requests
-        const isSessionStream = this.name.startsWith('__pb_') || this.name.startsWith('__hd_') || this.name.startsWith('__tb_');
-        if (isSessionStream) {
-          if (!this._webrtcRetried) {
-            this._webrtcRetried = true;
-            console.log(`[player] ${this.name}: session stream error — retry in 3s`);
-            this._closePeerConnection();
-            this._retryTimer = setTimeout(() => this._connectWebRTC(), 3000);
-            return;
-          }
-          this._webrtcRetried = false;
-          console.log(`[player] ${this.name}: session stream retry failed — MSE fallback`);
-          this._closePeerConnection();
-          this._connectMSE();
-          return;
-        }
-
         // Detect NVR connection errors (dial tcp, i/o timeout, connection refused)
-        // Only for permanent camera streams — session streams handled above
         const isConnectionError = CamPlayer._isConnectionError(errorText);
         if (isConnectionError) {
           console.log(`[player] ${this.name}: NVR connection error: ${errorText.substring(0, 80)}`);
           this._closePeerConnection();
           this._emitStage('nvr unreachable');
           this._emitStatus(false);
+          // Don't retry — NVR is down, MSE will also fail
+          // Circuit breaker in app.js will disable us and manage recovery
           if (this.onConnectionError) this.onConnectionError(this.name);
           return;
         }
 
-        // Regular camera streams — immediate MSE, track server errors
-        this._serverErrorCount = (this._serverErrorCount || 0) + 1;
-        if (this._serverErrorCount >= 2) {
-          console.warn(`[player] ${this.name}: server error #${this._serverErrorCount} — permanent MSE mode`);
-          this._fallbackReason = 'server';
-        } else {
-          console.log(`[player] ${this.name}: server error #${this._serverErrorCount} — MSE fallback`);
-          this._fallbackReason = 'network';
+        // Other errors → retry once before MSE fallback
+        if (!this._webrtcRetried) {
+          this._webrtcRetried = true;
+          this._closePeerConnection();
+          this._retryTimer = setTimeout(() => this._connectWebRTC(), WEBRTC_RETRY_MS);
+          return;
         }
-        this._closePeerConnection();
+        this._webrtcRetried = false;
         this._connectMSE();
         return;
       }
@@ -451,7 +415,6 @@ export class CamPlayer {
       this._iceTimeout = setTimeout(() => {
         if (this.mode === 'webrtc' && !this.connected) {
           console.log(`[player] ${this.name}: ICE timeout (${ICE_TIMEOUT_MS}ms), falling back to MSE`);
-          this._fallbackReason = 'network';
           this._connectMSE();
         }
       }, ICE_TIMEOUT_MS);
@@ -459,7 +422,6 @@ export class CamPlayer {
     } catch (err) {
       console.log(`[player] ${this.name}: WebRTC error: ${err.message}`);
       if (!this.connected && this.mode === 'webrtc') {
-        this._fallbackReason = 'network';
         this._connectMSE();
       } else {
         this._emitStatus(false);
@@ -498,14 +460,6 @@ export class CamPlayer {
           console.log(`[player] ${this.name}: decode check #${this._videoDecodeAttempts} videoWidth=${w} mode=${this.mode}${this._elapsed()}`);
 
           if (w > 0) {
-            // WebRTC is working — clear any fallback state
-            this._fallbackReason = null;
-            this._codecMismatch = false;
-            this._serverErrorCount = 0;
-            CamPlayer._probeWaiters.delete(this);
-            CamPlayer._mseCache.delete(CamPlayer._getCameraId(this.name));
-            // Reset probe backoff — WebRTC truly works
-            CamPlayer._probeDelay = 30000;
             this._emitStage('playing');
             return;
           }
@@ -518,31 +472,10 @@ export class CamPlayer {
             return;
           }
 
-          // All attempts failed — but WHY?
-          // If ICE never reached 'connected', UDP isn't getting through — network issue.
-          // If ICE is connected but no decode — codec truly unsupported.
-          const iceState = this.pc?.iceConnectionState;
-          const reason = (iceState && iceState !== 'connected' && iceState !== 'completed')
-            ? 'network' : 'codec';
-          console.log(`[player] ${this.name}: WebRTC no decode after ${maxAttempts} checks — fallback (${reason}, ICE=${iceState})${this._elapsed()}`);
-          this._emitStage(reason === 'codec' ? 'codec fallback' : 'network fallback');
+          // All attempts failed — codec truly unsupported
+          console.log(`[player] ${this.name}: WebRTC no decode after ${maxAttempts} checks — fallback${this._elapsed()}`);
+          this._emitStage('codec fallback');
           this._codecMismatch = true;
-          this._fallbackReason = reason;
-
-          // Track mass-switch failure — if many cameras fall back soon after sentinel switch
-          if (reason === 'network' && CamPlayer._lastMassSwitchAt &&
-              Date.now() - CamPlayer._lastMassSwitchAt < 30000) {
-            CamPlayer._massSwitchFailed = (CamPlayer._massSwitchFailed || 0) + 1;
-            const total = CamPlayer._massSwitchCount || 1;
-            if (CamPlayer._massSwitchFailed >= Math.floor(total * 0.5)) {
-              // More than half failed — mass switch didn't work, increase backoff
-              const newDelay = Math.min(CamPlayer._probeDelay * 4, 600000); // up to 10 min
-              console.warn(`[player] mass switch failed (${CamPlayer._massSwitchFailed}/${total}) — backoff to ${Math.round(newDelay / 1000)}s`);
-              CamPlayer._probeDelay = newDelay;
-              CamPlayer._lastMassSwitchAt = 0; // only log once
-            }
-          }
-
           this._closePeerConnection();
           if (CamPlayer.h265MSESupported) {
             this._connectMSE();
@@ -567,13 +500,9 @@ export class CamPlayer {
         clearTimeout(this._iceDisconnectTimer);
         this._iceDisconnectTimer = null;
         if (!this.connected) this._emitStatus(true);
-        // If video was playing before disconnect, restore immediately
-        if (this.video.videoWidth > 0) this._emitStage('playing');
       } else if (state === 'disconnected') {
         // Transient state — ICE often auto-recovers in 2-5s.
-        // Show loading overlay immediately to cover frozen/black video,
-        // but wait before actually reconnecting.
-        this._emitStage('ice recovering');
+        // Wait before reconnecting to avoid thundering herd with 46+ cameras.
         if (!this._iceDisconnectTimer) {
           const grace = 5000 + Math.random() * 3000; // 5-8s jitter
           console.log(`[player] ${this.name}: ICE disconnected, waiting ${Math.round(grace / 1000)}s for recovery`);
@@ -591,7 +520,6 @@ export class CamPlayer {
       } else if (state === 'failed') {
         clearTimeout(this._iceDisconnectTimer);
         this._iceDisconnectTimer = null;
-        this._fallbackReason = 'network';
         this._connectMSE();
       } else if (state === 'closed') {
         clearTimeout(this._iceDisconnectTimer);
@@ -685,10 +613,7 @@ export class CamPlayer {
         if (!this.enabled) { this._closeWebSocket(); return; }
         console.log(`[player] ${this.name}: WS open${this._elapsed()}`);
         this._emitStage('mse buffering');
-        this.ws.send(JSON.stringify({
-          type: 'mse',
-          value: 'avc1.640029,avc1.64002A,avc1.640033,hvc1.1.6.L153.B0,mp4a.40.2,mp4a.40.5,flac,opus'
-        }));
+        this.ws.send(JSON.stringify({ type: 'mse', value: '' }));
       };
 
       this.ws.onmessage = (event) => {
@@ -764,14 +689,8 @@ export class CamPlayer {
 
         this._emitStatus(true);
         this.retryDelay = RETRY_BASE_MS;
-        this._mseConsecutiveFailures = 0;
 
-        // Schedule WebRTC recovery probe if fallback was due to network (not codec)
-        if (this._fallbackReason === 'network' && !CamPlayer.globalForceMSE) {
-          this._scheduleWebRtcProbe();
-        }
-
-        if (/mp4a|opus|aac|flac|pcm|mulaw|alaw/i.test(mimeType) && this.onAudioTrack) {
+        if (/mp4a|opus|aac/i.test(mimeType) && this.onAudioTrack) {
           this.onAudioTrack();
         }
 
@@ -891,21 +810,10 @@ export class CamPlayer {
   _scheduleRetry() {
     if (!this.enabled) return;
 
-    this._totalFailures++;
-    // After 20 consecutive failures (any protocol), give up — camera is likely offline
-    if (this._totalFailures >= 20) {
-      if (!this._dead) {
-        this._dead = true;
-        console.warn(`[player] ${this.name}: too many failures (${this._totalFailures}), giving up — retry manually`);
-        this._emitStage('offline');
-      }
-      return;
-    }
-
     clearTimeout(this._retryTimer);
     this._emitStage('reconnecting');
 
-    const useMSE = CamPlayer.globalForceMSE || this.mode === 'mse' || this._codecMismatch || this._fallbackReason === 'server';
+    const useMSE = CamPlayer.globalForceMSE || this.mode === 'mse' || this._codecMismatch;
     // Add jitter (±1.5s) to prevent thundering herd when many cameras reconnect simultaneously
     const jitter = Math.round((Math.random() - 0.5) * 3000);
     const delay = Math.max(1000, this.retryDelay + jitter);
@@ -923,242 +831,6 @@ export class CamPlayer {
 
     if (this.retryDelay < RETRY_MAX_MS) {
       this.retryDelay = Math.min(this.retryDelay + 2000, RETRY_MAX_MS);
-    }
-  }
-
-  // ── WebRTC recovery probe ──
-  // When MSE fallback was due to network issues (WiFi switch, ICE timeout),
-  // periodically try WebRTC again. Exponential backoff: 30s → 60s → 120s → 300s cap.
-
-  // ── WebRTC recovery: global sentinel probe ──
-  // One camera probes at a time. If it succeeds → all network-fallback cameras switch.
-  // One probe is sufficient to answer "is UDP/WebRTC working?" — no need for 46 identical probes.
-
-  static _probeSentinel = null;       // the CamPlayer currently probing (or null)
-  static _probeWaiters = new Set();   // cameras waiting for sentinel result
-  static _probeTimer = null;
-  static _probeDelay = 30000;         // global backoff: 30s → 60s → 120s → 300s
-  static _lastMassSwitchAt = 0;      // timestamp of last mass switch
-  static _massSwitchCount = 0;       // how many cameras were switched
-  static _massSwitchFailed = 0;      // how many fell back after switch
-
-  _scheduleWebRtcProbe() {
-    if (!this.enabled || CamPlayer.globalForceMSE) return;
-    if (this._fallbackReason !== 'network') return;
-
-    // Don't probe session streams
-    if (this.name.startsWith('__pb_') || this.name.startsWith('__hd_') || this.name.startsWith('__t_') ||
-        this.name.startsWith('hd_') || this.name.startsWith('t_')) return;
-
-    // Register as waiter
-    CamPlayer._probeWaiters.add(this);
-
-    // If no probe is scheduled, schedule one
-    if (!CamPlayer._probeTimer && !CamPlayer._probeSentinel) {
-      const delay = CamPlayer._probeDelay;
-      // Add jitter to avoid thundering herd on page load
-      const jitter = Math.round(Math.random() * 5000);
-      console.log(`[player] sentinel probe scheduled in ${Math.round((delay + jitter) / 1000)}s (${CamPlayer._probeWaiters.size} cameras waiting)`);
-
-      CamPlayer._probeTimer = setTimeout(() => {
-        CamPlayer._probeTimer = null;
-        CamPlayer._runSentinelProbe();
-      }, delay + jitter);
-    }
-  }
-
-  static _runSentinelProbe() {
-    // Pick first eligible waiter as sentinel
-    let sentinel = null;
-    for (const cam of CamPlayer._probeWaiters) {
-      if (cam.enabled && cam.mode === 'mse' && cam.connected && cam._fallbackReason === 'network' && !(cam._serverErrorCount > 0)) {
-        sentinel = cam;
-        break;
-      }
-    }
-    if (!sentinel) {
-      CamPlayer._probeWaiters.clear();
-      return;
-    }
-
-    CamPlayer._probeSentinel = sentinel;
-    sentinel._probeWebRtc().then((success) => {
-      CamPlayer._probeSentinel = null;
-
-      if (success) {
-        // Sentinel succeeded → switch all waiters to WebRTC
-        const waiters = [...CamPlayer._probeWaiters].filter(cam =>
-          cam !== sentinel && cam.enabled && !cam._dead && cam.mode === 'mse' &&
-          cam._fallbackReason === 'network' && !(cam._serverErrorCount > 0)
-        );
-        console.log(`[player] sentinel probe ✓ — switching ${waiters.length} cameras to WebRTC`);
-        // DON'T reset backoff yet — wait until mass switch actually succeeds
-        CamPlayer._probeWaiters.clear();
-        CamPlayer._lastMassSwitchAt = Date.now();
-        CamPlayer._massSwitchCount = waiters.length;
-        CamPlayer._massSwitchFailed = 0;
-
-        // Stop MSE + start WebRTC atomically per camera, 200ms apart (less thundering herd)
-        waiters.forEach((cam, i) => {
-          setTimeout(() => {
-            if (!cam.enabled || cam.mode !== 'mse') return;
-            cam._fallbackReason = null;
-            cam._codecMismatch = false;
-            CamPlayer._mseCache.delete(CamPlayer._getCameraId(cam.name));
-            cam.stop();
-            CamPlayer._mseRelease(cam);
-            cam._connectWebRTC();
-          }, i * 200);
-        });
-      } else {
-        // Sentinel failed → increase backoff, schedule next probe
-        CamPlayer._probeDelay = Math.min(CamPlayer._probeDelay * 2, 300000);
-        console.log(`[player] sentinel probe ✗ — next in ${Math.round(CamPlayer._probeDelay / 1000)}s`);
-        CamPlayer._probeTimer = setTimeout(() => {
-          CamPlayer._probeTimer = null;
-          CamPlayer._runSentinelProbe();
-        }, CamPlayer._probeDelay + Math.round(Math.random() * 5000));
-      }
-    });
-  }
-
-  /**
-   * Probe WebRTC: try to switch back from MSE.
-   * Creates a temporary PeerConnection to test if WebRTC works now.
-   * Returns true if media received, false otherwise.
-   * Sentinel caller handles switching other cameras.
-   */
-  async _probeWebRtc() {
-    const camId = CamPlayer._getCameraId(this.name);
-    console.log(`[player] ${this.name}: sentinel probing WebRTC...`);
-
-    let probePc = null;
-    let probeVideo = null;
-    try {
-      probePc = new RTCPeerConnection({
-        iceServers: STUN_SERVERS.length ? STUN_SERVERS : [],
-      });
-
-      const videoTransceiver = probePc.addTransceiver('video', { direction: 'recvonly' });
-      probePc.addTransceiver('audio', { direction: 'recvonly' });
-
-      if (videoTransceiver.setCodecPreferences) {
-        const allCodecs = RTCRtpReceiver.getCapabilities('video').codecs;
-        const h264 = allCodecs.filter(c => c.mimeType === 'video/H264');
-        const h265 = CamPlayer.h265WebRTCSupported
-          ? allCodecs.filter(c => c.mimeType === 'video/H265' || c.mimeType === 'video/HEVC')
-          : [];
-        const preferred = h265.length ? [...h265, ...h264] : [...h264];
-        if (preferred.length > 0) videoTransceiver.setCodecPreferences(preferred);
-      }
-
-      const offer = await probePc.createOffer();
-      await probePc.setLocalDescription(offer);
-
-      if (probePc.iceGatheringState !== 'complete') {
-        await new Promise((resolve) => {
-          probePc.addEventListener('icegatheringstatechange', () => {
-            if (probePc?.iceGatheringState === 'complete') resolve();
-          });
-          setTimeout(resolve, ICE_GATHER_TIMEOUT_MS);
-        });
-      }
-
-      const go2rtcApi = window.__okoConfig?.go2rtc_api || '/api';
-      const response = await fetch(
-        `${go2rtcApi}/webrtc?src=${encodeURIComponent(this.name)}`,
-        { method: 'POST', body: probePc.localDescription.sdp }
-      );
-
-      if (!response.ok) {
-        const errorText = await response.text().catch(() => '');
-        if (errorText.includes('codecs not matched')) {
-          console.log(`[player] ${this.name}: probe codec mismatch — removing from waiters`);
-          this._fallbackReason = 'codec';
-          this._codecMismatch = true;
-          CamPlayer._probeWaiters.delete(this);
-          probePc.close();
-          return false;
-        }
-        throw new Error(`probe HTTP ${response.status}`);
-      }
-
-      const answerSdp = await response.text();
-
-      // Set up handlers BEFORE setRemoteDescription — ontrack fires DURING processing
-      let resolveMedia;
-      const gotMedia = new Promise((resolve) => { resolveMedia = resolve; });
-      const mediaTimeout = setTimeout(() => resolveMedia(false), 10000);
-
-      // Create a hidden video element to test actual decode
-      probeVideo = document.createElement('video');
-      probeVideo.muted = true;
-      probeVideo.autoplay = true;
-      probeVideo.playsInline = true;
-      probeVideo.style.cssText = 'position:fixed;width:1px;height:1px;opacity:0;pointer-events:none';
-      document.body.appendChild(probeVideo);
-
-      probePc.ontrack = (event) => {
-        if (event.track.kind === 'video') {
-          // Attach stream to hidden video and wait for actual decode
-          probeVideo.srcObject = event.streams[0];
-          probeVideo.play().catch(() => {});
-
-          // Check for actual decode (videoWidth > 0)
-          let decodeChecks = 0;
-          const decodeInterval = setInterval(() => {
-            decodeChecks++;
-            if (probeVideo.videoWidth > 0) {
-              clearInterval(decodeInterval);
-              clearTimeout(mediaTimeout);
-              resolveMedia(true);
-            } else if (decodeChecks >= 6) { // 3 seconds, no decode
-              clearInterval(decodeInterval);
-              clearTimeout(mediaTimeout);
-              resolveMedia(false);
-            }
-          }, 500);
-        }
-      };
-      probePc.oniceconnectionstatechange = () => {
-        if (probePc.iceConnectionState === 'failed') {
-          clearTimeout(mediaTimeout);
-          resolveMedia(false);
-        }
-      };
-
-      await probePc.setRemoteDescription(
-        new RTCSessionDescription({ type: 'answer', sdp: answerSdp })
-      );
-
-      const success = await gotMedia;
-
-      // Cleanup probe video
-      probeVideo.srcObject = null;
-      probeVideo.remove();
-
-      probePc.close();
-      probePc = null;
-
-      if (success) {
-        console.log(`[player] ${this.name}: ✓ sentinel probe succeeded`);
-        this._fallbackReason = null;
-        this._codecMismatch = false;
-        CamPlayer._mseCache.delete(camId);
-        this.stop();
-        CamPlayer._mseRelease(this);
-        this._connectWebRTC();
-        return true;
-      } else {
-        console.log(`[player] ${this.name}: ✗ sentinel probe failed`);
-        return false;
-      }
-
-    } catch (err) {
-      console.log(`[player] ${this.name}: probe error: ${err.message}`);
-      if (probePc) { try { probePc.close(); } catch {} }
-      if (probeVideo) { probeVideo.srcObject = null; probeVideo.remove(); }
-      return false;
     }
   }
 
@@ -1191,8 +863,6 @@ export class CamPlayer {
     this.connected = online;
     if (online) {
       this._lastBytesGrowth = Date.now();
-      this._totalFailures = 0;
-      this._dead = false;
     }
     console.log(`[player] ${this.name}: ${online ? 'CONNECTED' : 'DISCONNECTED'} (${this.mode})${this._elapsed()}`);
     if (this.onStatusChange) this.onStatusChange(online);

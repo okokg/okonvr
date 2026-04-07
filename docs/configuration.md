@@ -1,7 +1,7 @@
 # Configuration Reference
 
-OKO NVR PLAYER uses two configuration files:
-- `oko.yaml` — main config (NVRs, cameras, UI settings)
+OKO NVR uses two configuration files:
+- `oko.yaml` — main config (NVRs, cameras, playback, snapshots, UI)
 - `.env` — infrastructure only (server IP, ports)
 
 Both files are NOT committed to git. Templates: `oko.yaml.example`, `.env.example`.
@@ -13,6 +13,7 @@ Both files are NOT committed to git. Templates: `oko.yaml.example`, `.env.exampl
 ```yaml
 server:
   port: 3000          # backend API port (internal, Docker only)
+  timezone: "Asia/Bishkek"  # optional, for playback time display
 ```
 
 ### go2rtc
@@ -25,40 +26,70 @@ go2rtc:
 
 WebRTC candidates are set via `SERVER_IP` in `.env`.
 
-### ffmpeg
+### playback
 
 ```yaml
-ffmpeg:
-  timeout: 30
+playback:
+  timeout: 30                    # FFmpeg timeout for archive streams (seconds)
   playback_input: "-fflags nobuffer -flags low_delay -buffer_size 1 -rtsp_transport tcp -timeout 30 -i {input}"
+  mse_cache_ttl: 60              # remember MSE mode per camera (seconds)
+  force_mse: false               # always use MSE for archive playback
 ```
 
-Custom ffmpeg input profile for archive playback. The `{input}` placeholder is replaced with the RTSP URL. Adjust `-buffer_size` and `-timeout` if playback has issues with keyframe detection.
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `timeout` | `30` | Seconds before ffmpeg gives up on archive stream. Increase for slow NVRs. |
+| `playback_input` | (see above) | Custom ffmpeg input profile. `{input}` = RTSP URL. |
+| `mse_cache_ttl` | `60` | After MSE fallback, skip WebRTC for this camera for N seconds. |
+| `force_mse` | `false` | `true` = MSE for all archives (avoids keyframe delays). `false` = try WebRTC first. |
+
+Legacy: `ffmpeg:` section is still supported as fallback (reads `ffmpeg.timeout`, `ffmpeg.playback_input`).
+
+### snapshots
+
+```yaml
+snapshots:
+  enabled: true                  # enable/disable snapshot preloading
+  source: auto                   # auto | native | go2rtc
+  interval: 30                   # refresh interval in seconds
+  delay: 200                     # delay between sequential camera fetches (ms)
+  timeout: 8000                  # per-snapshot fetch timeout (ms)
+```
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `enabled` | `true` | Show snapshot backgrounds before video stream connects. |
+| `source` | `auto` | `auto` = try NVR HTTP API first, fallback to go2rtc. `native` = NVR API only (fast ~100ms). `go2rtc` = frame.jpeg only (slower ~1-2s). |
+| `interval` | `30` | Seconds between snapshot refreshes. |
+| `delay` | `200` | Milliseconds between sequential camera fetches (prevents NVR overload). |
+| `timeout` | `8000` | Per-snapshot fetch timeout in ms. |
 
 ### ui
 
 ```yaml
 ui:
-  title: "OKO NVR PLAYER"      # header title and browser tab
-  locale: "en"                   # interface language (future)
+  title: "OKO NVR"               # header title and browser tab
   default_grid: "auto"           # auto | 1 | 2 | 4 | 6 | 8 | 10
   theme: "dark"                  # dark | light (default for new users)
   compact: false                 # start in compact mode
   stagger_ms: 500                # delay between camera connections (ms)
   bitrate_interval: 5000         # bitrate refresh interval (ms)
   sync_interval: 15000           # camera list sync interval (ms)
+  nvr_health_interval: 30000     # NVR health check interval (ms)
+  nvr_health_failures: 3         # failures before marking NVR offline
 ```
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `title` | `OKO NVR PLAYER` | Shown in header and browser tab. Hot-reloadable. |
-| `locale` | `en` | Reserved for future localization. |
+| `title` | `OKO NVR` | Shown in header and browser tab. Hot-reloadable. |
 | `default_grid` | `auto` | Grid layout on page load. `auto` fits all cameras on screen. |
 | `theme` | `dark` | Default theme. User can toggle with T key, stored in localStorage. |
 | `compact` | `false` | Start in compact mode (hides header and controls). |
 | `stagger_ms` | `500` | Milliseconds between starting each camera stream. Prevents NVR overload on cold start. Increase for slow NVRs. |
 | `bitrate_interval` | `5000` | How often to update bitrate display (ms). Lower = more CPU. |
 | `sync_interval` | `15000` | How often to check for config changes (ms). Controls hot-reload responsiveness. |
+| `nvr_health_interval` | `30000` | How often to check NVR connectivity (ms). |
+| `nvr_health_failures` | `3` | Consecutive failures before marking NVR offline and triggering re-discovery on recovery. |
 
 User preferences (theme, compact) in localStorage override config defaults. Config only sets the initial state for new browsers.
 
@@ -112,7 +143,7 @@ When channels is omitted or contains `*`, the backend queries the NVR's HTTP API
 | Dahua | `/cgi-bin/configManager.cgi?action=getConfig&name=ChannelTitle` | Digest |
 | Generic | Not supported | — |
 
-Discovery also retrieves camera names from the NVR.
+Discovery also retrieves camera names, IPs, models, MACs, firmware, and serial numbers from the NVR.
 
 #### Provider URL patterns
 

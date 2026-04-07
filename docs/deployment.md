@@ -32,6 +32,9 @@ htpasswd -c .htpasswd admin
 # Start all services
 docker compose up -d
 
+# Start with Google Coral TPU detection (optional)
+docker compose --profile coral up -d
+
 # View logs
 docker compose logs -f
 
@@ -49,6 +52,22 @@ docker compose up -d --build
 | backend | node:20-alpine + ffmpeg | 3000 (internal) | API, config, codec probing |
 | go2rtc | alexxit/go2rtc | 8555 TCP+UDP | WebRTC/RTSP media |
 | nginx | nginx:alpine | 80 (configurable) | Reverse proxy, auth, static |
+| detect | debian:11-slim + pycoral | 3001 (internal) | Coral TPU AI detection (optional, `--profile coral`) |
+
+### Google Coral TPU (optional)
+
+The detect service runs YOLOv8n inference on a Google Coral USB Accelerator. It is optional — without it, Watch Mode uses browser-side MediaPipe WASM detection automatically.
+
+```bash
+# With Coral
+docker compose --profile coral up -d
+
+# Without Coral (default — browser-side detection fallback)
+docker compose up -d
+```
+
+Requires: Coral USB Accelerator, `/dev/bus/usb` accessible, `privileged: true`.
+Place `.tflite` models in `./models/`.
 
 ### Dev Mode
 
@@ -206,6 +225,7 @@ Only these files need backup:
 - `.env` — server settings
 - `.htpasswd` — auth credentials
 - `/data/oko.db` — camera metadata, codec cache, sort order (Docker volume `backend-data`)
+- `models/` — AI model files (if using Coral or custom ONNX models)
 
 ## Resource Usage
 

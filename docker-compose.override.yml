@@ -1,6 +1,5 @@
 # Dev mode: auto-reload on .ts changes
 # Usage: docker compose up -d --build
-# (docker compose automatically merges this with docker-compose.yml)
 
 services:
   backend:
@@ -12,3 +11,4 @@ services:
       - go2rtc-config:/config/go2rtc
       - ./oko.yaml:/config/oko.yaml:ro
       - ./backend/src:/app/src:ro
+      - ./models:/models:ro

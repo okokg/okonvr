@@ -6,6 +6,7 @@ OKO NVR PLAYER is fully navigable without a mouse.
 
 | Key | Action |
 |-----|--------|
+| `W` | Toggle Watch Mode (motion detection + AI) |
 | `F` | Toggle native browser fullscreen |
 | `R` | Refresh — reconnect all cameras |
 | `C` | Toggle compact mode (hides header & controls) |
@@ -32,19 +33,51 @@ Focus is set on the first camera at page load. Arrow keys work immediately.
 
 ## Camera Fullscreen
 
+### Navigation & Playback
+
 | Key | Action |
 |-----|--------|
 | `←` `→` | Switch to previous/next camera |
-| `Enter` / `Space` | Exit to grid (focus stays on this camera) |
+| `Enter` | Exit to grid (focus stays on this camera) |
 | `Esc` | Exit to grid |
+| `Space` | Pause / resume video |
 | `H` | Toggle SD/HD stream quality |
-| `F` | Toggle native browser fullscreen |
 | `P` | Open/close archive playback panel |
+| `L` | Return to live (if in playback) or open playback panel |
+| `J` | Seek backward 30s in archive (or start archive at now-30s) |
+| `K` | Seek forward 30s in archive (or start archive at now-30s) |
+| `Shift+J` | Seek backward 5 minutes |
+| `Shift+K` | Seek forward 5 minutes |
+| `E` | Jump to next smart event on timeline |
+| `Shift+E` | Jump to previous smart event on timeline |
+
+### Audio & Intercom
+
+| Key | Action |
+|-----|--------|
 | `M` | Mute/unmute this camera |
+| `↑` `↓` | Volume up/down (10% steps) |
 | `V` | Toggle intercom / talkback (lock mode) |
+
+### Zoom
+
+| Key | Action |
+|-----|--------|
+| `+` / `=` | Zoom in (2× → 3× → 4×) |
+| `-` | Zoom out (4× → 3× → 2× → 1×) |
 | `Z` | Reset zoom to 1× |
-| `+` / `=` | Zoom in (2×, 3×, 4×) |
-| `-` | Zoom out |
+| `1` `2` `3` `4` | Zoom presets (1× 2× 3× 4×, centered) |
+| Mouse wheel | Zoom in/out centered on cursor |
+| Click + drag | Pan the zoomed view |
+
+A minimap appears in the corner when zoomed showing the visible area.
+
+### Other
+
+| Key | Action |
+|-----|--------|
+| `F` | Toggle native browser fullscreen |
+| `?` or `/` | Show keyboard shortcuts help overlay |
 
 ## Intercom (Talkback)
 
@@ -57,17 +90,17 @@ Focus is set on the first camera at page load. Arrow keys work immediately.
 
 When intercom is active: camera audio auto-enables, red border appears around camera cell, mic icons turn red.
 
-## Zoom (Digital)
+## Watch Mode
 
 | Action | Result |
 |--------|--------|
-| `+` / `=` | Zoom in (2× → 3× → 4×) |
-| `-` | Zoom out (4× → 3× → 2× → 1×) |
-| `Z` | Reset to 1× |
-| Mouse wheel (in fullscreen) | Zoom in/out centered on cursor |
-| Click + drag (when zoomed) | Pan the zoomed view |
+| `W` | Toggle Watch Mode on/off |
+| Click Watch button (header) | Toggle + show settings popup |
+| Sensitivity slider | Adjust motion detection threshold (1–10) |
+| Type checkboxes | Filter: Motion / Human / Vehicle / Animal |
+| "Detected only" checkbox | Hide cameras without detections |
 
-A minimap appears in the corner when zoomed showing the visible area.
+In fullscreen with Watch Mode active: AI overlay draws bounding boxes over detected objects. Badge shows detection engine (CORAL TPU or EfficientNet).
 
 ## Mute Behavior
 

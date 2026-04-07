@@ -1,0 +1,4 @@
+numpy>=1.24
+Pillow>=10.0
+# Coral TPU (install pycoral separately — requires specific TF version)
+# pip install pycoral tflite-runtime from google coral repos

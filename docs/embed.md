@@ -20,11 +20,11 @@ Zero dependencies, single file (~490 lines, ~12KB).
 ```
 web/embed/
 ├── oko-embed.js          # Standalone player (no dependencies)
-├── oko-cams.js           # Integration shim for Vorota admin panel
 ├── index.html            # Demo page (test against local OKO)
-├── nginx-example.conf    # Generic nginx config for external sites
-└── vorota-nginx.conf     # Vorota-specific nginx mappings
+└── nginx-example.conf    # Generic nginx config for external sites
 ```
+
+Source of truth: `packages/oko-player/src/embed/oko-embed.js` (symlinked).
 
 ## Quick Start
 

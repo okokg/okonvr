@@ -21,6 +21,9 @@ import { snapshotRoutes } from './routes/snapshots';
 import { talkbackRoutes } from './routes/talkback';
 import { playbackThumbnailRoutes } from './routes/playback-thumbnail';
 import { eventRoutes } from './routes/events';
+import { modelRoutes } from './routes/models';
+import websocket from '@fastify/websocket';
+import { wsHubPlugin } from './services/ws-hub';
 
 /** Run auto-discovery for a single NVR. Pure function — caller manages activities. */
 async function discoverNvr(nvr: NvrEntry): Promise<boolean> {
@@ -184,6 +187,7 @@ async function main() {
   initStreamManager(config.go2rtc.api);
 
   const fastify = Fastify({ logger: true });
+  await fastify.register(websocket);
   await fastify.register(cameraRoutes);
   await fastify.register(playbackRoutes);
   await fastify.register(hdStreamRoutes);
@@ -193,6 +197,8 @@ async function main() {
   await fastify.register(playbackThumbnailRoutes);
   await fastify.register(talkbackRoutes);
   await fastify.register(eventRoutes);
+  await fastify.register(modelRoutes);
+  await fastify.register(wsHubPlugin);
 
   await fastify.listen({ port: config.server.port, host: '0.0.0.0' });
   console.log(`Backend listening on port ${config.server.port}`);

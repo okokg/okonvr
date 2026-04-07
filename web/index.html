@@ -38,11 +38,14 @@
         <div class="watch-popup" id="watch-popup">
           <div class="watch-popup-row">
             <span class="watch-popup-label">Sensitivity</span>
-            <input type="range" class="watch-slider" id="watch-sensitivity" min="1" max="10" value="5" step="1">
-            <span class="watch-slider-val" id="watch-sensitivity-val">5</span>
+            <input type="range" class="watch-slider" id="watch-sensitivity" min="1" max="10" value="10" step="1">
+            <span class="watch-slider-val" id="watch-sensitivity-val">10</span>
           </div>
           <div class="watch-popup-row watch-ai-section">
-            <span class="watch-popup-label">AI detect</span>
+            <span class="watch-popup-label">AI model</span>
+            <select class="watch-model-select" id="watch-model-select">
+              <option value="mediapipe">EfficientDet (CDN)</option>
+            </select>
             <span class="watch-ai-status" id="watch-ai-status">off</span>
           </div>
           <div class="watch-popup-row watch-type-filters" id="watch-type-filters">

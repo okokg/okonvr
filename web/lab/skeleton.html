@@ -1,0 +1,583 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OKO — Skeleton Detection Lab</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #0a0a0c; color: #e0e0e4; font-family: -apple-system, sans-serif; }
+
+  .toolbar {
+    display: flex; align-items: center; gap: 12px; padding: 10px 16px;
+    background: #111; border-bottom: 1px solid #222;
+  }
+  .toolbar h1 { font-size: 14px; font-weight: 500; color: #888; }
+  .toolbar select, .toolbar button {
+    background: #1a1a1e; color: #e0e0e4; border: 1px solid #333;
+    border-radius: 4px; padding: 4px 10px; font-size: 12px; cursor: pointer;
+  }
+  .toolbar button:hover { background: #252528; }
+  .toolbar button.active { background: rgba(255,71,87,0.15); border-color: rgba(255,71,87,0.4); color: #ff4757; }
+  .status { font-size: 11px; color: #666; font-family: monospace; }
+  .status.ready { color: #00d4aa; }
+  .status.error { color: #ff4757; }
+
+  .container {
+    display: flex; gap: 12px; padding: 12px; height: calc(100vh - 50px);
+  }
+
+  .video-wrap {
+    flex: 1; position: relative; background: #000; border-radius: 6px; overflow: hidden;
+  }
+  .video-wrap video {
+    width: 100%; height: 100%; object-fit: contain;
+  }
+  .video-wrap canvas {
+    position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+    pointer-events: none;
+  }
+
+  .sidebar {
+    width: 280px; flex-shrink: 0; display: flex; flex-direction: column; gap: 8px;
+  }
+  .panel {
+    background: #111; border: 1px solid #222; border-radius: 6px; padding: 10px 14px;
+  }
+  .panel-title { font-size: 11px; color: #666; text-transform: uppercase; margin-bottom: 8px; letter-spacing: 0.5px; }
+
+  .log {
+    flex: 1; overflow-y: auto; font-family: monospace; font-size: 10px;
+    line-height: 1.5; color: #888; max-height: 300px;
+  }
+  .log-human { color: #ff4757; }
+  .log-vehicle { color: #ffa502; }
+  .log-info { color: #00d4aa; }
+
+  .stats { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+  .stat {
+    background: #1a1a1e; border-radius: 4px; padding: 6px 10px;
+    font-family: monospace; font-size: 11px;
+  }
+  .stat-label { color: #666; font-size: 9px; }
+  .stat-val { color: #e0e0e4; font-size: 16px; font-weight: 500; }
+
+  .controls label { display: flex; align-items: center; gap: 6px; font-size: 11px; color: #aaa; margin: 4px 0; }
+  .controls input[type=range] { flex: 1; accent-color: #ff4757; }
+  .controls input[type=checkbox] { accent-color: #ff4757; }
+</style>
+</head>
+<body>
+
+<div class="toolbar">
+  <h1>OKO Skeleton Lab</h1>
+  <select id="cam-select"><option>Loading cameras...</option></select>
+  <div style="display:flex; gap:0;">
+    <button id="sd-btn" class="active" style="border-radius:4px 0 0 4px; font-size:11px; padding:4px 8px;">SD</button>
+    <button id="hd-btn" style="border-radius:0 4px 4px 0; font-size:11px; padding:4px 8px; border-left:0;">HD</button>
+  </div>
+  <button id="start-btn">Start</button>
+  <button id="stop-btn" style="display:none">Stop</button>
+  <span class="status" id="model-status">Model: loading...</span>
+  <span style="flex:1"></span>
+  <span class="status" id="fps-status">—</span>
+</div>
+
+<div class="container">
+  <div class="video-wrap">
+    <video id="video" autoplay muted playsinline></video>
+    <canvas id="overlay"></canvas>
+  </div>
+
+  <div class="sidebar">
+    <div class="panel">
+      <div class="panel-title">Stats</div>
+      <div class="stats">
+        <div class="stat"><div class="stat-label">Confirmed</div><div class="stat-val" id="st-poses">0</div></div>
+        <div class="stat"><div class="stat-label">Raw</div><div class="stat-val" id="st-raw" style="color:#666">0</div></div>
+        <div class="stat"><div class="stat-label">Inference</div><div class="stat-val" id="st-infer">—</div></div>
+        <div class="stat"><div class="stat-label">FPS</div><div class="stat-val" id="st-fps">—</div></div>
+        <div class="stat"><div class="stat-label">Resolution</div><div class="stat-val" id="st-res" style="font-size:10px">—</div></div>
+      </div>
+    </div>
+
+    <div class="panel controls">
+      <div class="panel-title">Settings</div>
+      <label>
+        <span style="min-width:70px">Max poses</span>
+        <input type="range" id="max-poses" min="1" max="6" value="3" step="1">
+        <span id="max-poses-val" style="min-width:14px; text-align:right; font-family:monospace">3</span>
+      </label>
+      <label>
+        <span style="min-width:70px">Confidence</span>
+        <input type="range" id="confidence" min="0.1" max="0.9" value="0.5" step="0.05">
+        <span id="confidence-val" style="min-width:30px; text-align:right; font-family:monospace">0.50</span>
+      </label>
+      <label><input type="checkbox" id="show-skeleton" checked> Show skeleton</label>
+      <label><input type="checkbox" id="show-points" checked> Show landmarks</label>
+      <label><input type="checkbox" id="show-bbox" checked> Show bounding box</label>
+      <label>
+        <span style="min-width:70px">Confirm</span>
+        <input type="range" id="confirm-frames" min="1" max="10" value="3" step="1">
+        <span id="confirm-frames-val" style="min-width:20px; text-align:right; font-family:monospace">3f</span>
+      </label>
+      <label>
+        <span style="min-width:70px">Model</span>
+        <select id="model-select" style="flex:1; background:#1a1a1e; color:#e0e0e4; border:1px solid #333; border-radius:3px; padding:2px 4px; font-size:11px;">
+          <option value="lite">Lite (fast)</option>
+          <option value="full">Full (accurate)</option>
+          <option value="heavy">Heavy (precise)</option>
+        </select>
+      </label>
+    </div>
+
+    <div class="panel" style="flex:1; display:flex; flex-direction:column;">
+      <div class="panel-title">Detection log</div>
+      <div class="log" id="log"></div>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+const MODEL_URLS = {
+  lite: 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task',
+  full: 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/1/pose_landmarker_full.task',
+  heavy: 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_heavy/float16/1/pose_landmarker_heavy.task',
+};
+
+const WASM_CDN = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm';
+
+const POSE_CONNECTIONS = [
+  [0,1],[1,2],[2,3],[3,7],[0,4],[4,5],[5,6],[6,8],
+  [9,10],[11,12],[11,13],[13,15],[15,17],[15,19],[15,21],
+  [12,14],[14,16],[16,18],[16,20],[16,22],
+  [11,23],[12,24],[23,24],[23,25],[24,26],[25,27],[26,28],
+  [27,29],[28,30],[29,31],[30,32],[27,31],[28,32],
+];
+
+const COLORS = ['#ff4757','#ffa502','#00d4aa','#378ADD','#ff6b81','#7f77dd'];
+
+let PoseLandmarker, FilesetResolver, DrawingUtils;
+let poseLandmarker = null;
+let video, canvas, ctx;
+let running = false;
+let lastTs = 0;
+let frameCount = 0;
+let fpsTimer = 0;
+
+const log = document.getElementById('log');
+const modelStatus = document.getElementById('model-status');
+const fpsStatus = document.getElementById('fps-status');
+
+function addLog(msg, cls = '') {
+  const d = document.createElement('div');
+  if (cls) d.className = cls;
+  const t = new Date().toTimeString().slice(0, 8);
+  d.textContent = `[${t}] ${msg}`;
+  log.prepend(d);
+  if (log.children.length > 100) log.lastChild.remove();
+}
+
+// Load cameras
+async function loadCameras() {
+  const sel = document.getElementById('cam-select');
+  try {
+    const res = await fetch('/backend/cameras');
+    const cams = await res.json();
+    sel.innerHTML = '';
+    for (const cam of cams) {
+      const opt = document.createElement('option');
+      opt.value = cam.id;
+      opt.textContent = `${cam.id} — ${cam.label || cam.name || ''}`;
+      sel.appendChild(opt);
+    }
+    addLog(`Loaded ${cams.length} cameras`, 'log-info');
+  } catch (e) {
+    sel.innerHTML = '<option>Failed to load</option>';
+    addLog(`Camera load failed: ${e.message}`, 'log-human');
+  }
+}
+
+// Load model
+async function loadModel(type = 'lite') {
+  modelStatus.textContent = `Model: loading ${type}...`;
+  modelStatus.className = 'status';
+
+  try {
+    const vision = await import('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision/vision_bundle.mjs');
+    PoseLandmarker = vision.PoseLandmarker;
+    FilesetResolver = vision.FilesetResolver;
+    DrawingUtils = vision.DrawingUtils;
+
+    const fileset = await FilesetResolver.forVisionTasks(WASM_CDN);
+    const maxPoses = parseInt(document.getElementById('max-poses').value) || 3;
+    const conf = parseFloat(document.getElementById('confidence').value) || 0.5;
+
+    if (poseLandmarker) { poseLandmarker.close(); poseLandmarker = null; }
+
+    poseLandmarker = await PoseLandmarker.createFromOptions(fileset, {
+      baseOptions: { modelAssetPath: MODEL_URLS[type], delegate: 'GPU' },
+      runningMode: 'VIDEO',
+      numPoses: maxPoses,
+      minPoseDetectionConfidence: conf,
+      minTrackingConfidence: conf,
+    });
+
+    modelStatus.textContent = `Model: ${type} ready`;
+    modelStatus.className = 'status ready';
+    addLog(`Model ${type} loaded`, 'log-info');
+  } catch (e) {
+    modelStatus.textContent = `Model: ${e.message}`;
+    modelStatus.className = 'status error';
+    addLog(`Model load failed: ${e.message}`, 'log-human');
+  }
+}
+
+// Connect to camera WebRTC
+let currentPc = null;
+let currentHdStream = null;
+let useHd = false;
+
+async function connectCamera(camId) {
+  video = document.getElementById('video');
+  canvas = document.getElementById('overlay');
+  ctx = canvas.getContext('2d');
+
+  // Cleanup previous
+  if (currentPc) { currentPc.close(); currentPc = null; }
+  if (currentHdStream) {
+    fetch(`/backend/hd-stream/${encodeURIComponent(currentHdStream)}`, { method: 'DELETE' }).catch(() => {});
+    currentHdStream = null;
+  }
+  video.srcObject = null;
+  tracks.length = 0;
+  globalFrame = 0;
+
+  let streamSrc = camId;
+
+  // Create HD stream if needed
+  if (useHd) {
+    try {
+      addLog(`Creating HD stream for ${camId}...`, 'log-info');
+      const res = await fetch('/backend/hd-stream', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ camera: camId }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        streamSrc = data.stream;
+        currentHdStream = camId;
+        addLog(`HD stream: ${streamSrc}`, 'log-info');
+      } else {
+        addLog(`HD failed (${res.status}), using SD`, 'log-human');
+      }
+    } catch (e) {
+      addLog(`HD error: ${e.message}, using SD`, 'log-human');
+    }
+  }
+
+  try {
+    const pc = new RTCPeerConnection({ iceServers: [] });
+    currentPc = pc;
+    pc.addTransceiver('video', { direction: 'recvonly' });
+
+    pc.ontrack = (e) => {
+      video.srcObject = e.streams[0];
+      video.onloadedmetadata = () => {
+        addLog(`${streamSrc}: ${video.videoWidth}x${video.videoHeight} ${useHd ? 'HD' : 'SD'}`, 'log-info');
+      };
+    };
+
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+
+    const res = await fetch(`/api/webrtc?src=${streamSrc}`, {
+      method: 'POST',
+      body: offer.sdp,
+    });
+    const answer = await res.text();
+    await pc.setRemoteDescription({ type: 'answer', sdp: answer });
+  } catch (e) {
+    addLog(`WebRTC failed: ${e.message}`, 'log-human');
+  }
+}
+
+// ── Pose tracker: filter false positives by requiring N consecutive detections ──
+const tracks = []; // [{cx, cy, frames, lastSeen, id}]
+let trackIdCounter = 0;
+const MATCH_DIST = 0.15;  // normalized — how close a new detection must be to match existing track
+let MIN_FRAMES = 3;     // require N consecutive frames before showing
+
+function getCenterOfPose(lm) {
+  // Use hip midpoint (landmarks 23, 24) if visible, else average all visible points
+  const l23 = lm[23], l24 = lm[24];
+  if (l23 && l24 && (l23.visibility ?? 0) > 0.3 && (l24.visibility ?? 0) > 0.3) {
+    return { x: (l23.x + l24.x) / 2, y: (l23.y + l24.y) / 2 };
+  }
+  let sx = 0, sy = 0, n = 0;
+  for (const pt of lm) {
+    if ((pt.visibility ?? 0) > 0.3) { sx += pt.x; sy += pt.y; n++; }
+  }
+  return n > 0 ? { x: sx / n, y: sy / n } : { x: 0.5, y: 0.5 };
+}
+
+function updateTracks(landmarks, frameNum) {
+  const matched = new Set();
+  const results = []; // [{lm, track, confirmed}]
+
+  for (let p = 0; p < landmarks.length; p++) {
+    const lm = landmarks[p];
+    const center = getCenterOfPose(lm);
+
+    // Find closest existing track
+    let bestTrack = null, bestDist = MATCH_DIST;
+    for (const t of tracks) {
+      if (matched.has(t)) continue;
+      const dx = center.x - t.cx, dy = center.y - t.cy;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      if (dist < bestDist) { bestDist = dist; bestTrack = t; }
+    }
+
+    if (bestTrack) {
+      // Update existing track
+      bestTrack.cx = center.x;
+      bestTrack.cy = center.y;
+      bestTrack.frames++;
+      bestTrack.lastSeen = frameNum;
+      matched.add(bestTrack);
+      results.push({ lm, track: bestTrack, confirmed: bestTrack.frames >= MIN_FRAMES });
+    } else {
+      // New track
+      const t = { cx: center.x, cy: center.y, frames: 1, lastSeen: frameNum, id: ++trackIdCounter };
+      tracks.push(t);
+      matched.add(t);
+      results.push({ lm, track: t, confirmed: false });
+    }
+  }
+
+  // Remove stale tracks (not seen for 5 frames)
+  for (let i = tracks.length - 1; i >= 0; i--) {
+    if (frameNum - tracks[i].lastSeen > 5) tracks.splice(i, 1);
+  }
+
+  return results;
+}
+
+let globalFrame = 0;
+
+// Detection loop
+function detectLoop() {
+  if (!running || !poseLandmarker || !video) return;
+  if (video.readyState < 2 || video.videoWidth === 0) {
+    requestAnimationFrame(detectLoop);
+    return;
+  }
+
+  // Resize canvas
+  canvas.width = video.videoWidth;
+  canvas.height = video.videoHeight;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  // Monotonic timestamp
+  let ts = Math.round(performance.now());
+  if (ts <= lastTs) ts = lastTs + 1;
+  lastTs = ts;
+
+  const t0 = performance.now();
+  const result = poseLandmarker.detectForVideo(video, ts);
+  const inferMs = Math.round(performance.now() - t0);
+
+  // FPS
+  frameCount++;
+  if (performance.now() - fpsTimer > 1000) {
+    const fps = frameCount;
+    frameCount = 0;
+    fpsTimer = performance.now();
+    fpsStatus.textContent = `${fps} FPS`;
+    document.getElementById('st-fps').textContent = fps;
+    document.getElementById('st-res').textContent = `${video.videoWidth}x${video.videoHeight}`;
+  }
+
+  globalFrame++;
+  const showSkeleton = document.getElementById('show-skeleton').checked;
+  const showPoints = document.getElementById('show-points').checked;
+  const showBbox = document.getElementById('show-bbox').checked;
+
+  let confirmedCount = 0;
+
+  if (result.landmarks?.length) {
+    const tracked = updateTracks(result.landmarks, globalFrame);
+
+    for (const { lm, track, confirmed } of tracked) {
+      const color = COLORS[(track.id - 1) % COLORS.length];
+      const w = canvas.width, h = canvas.height;
+      const alpha = confirmed ? 0.7 : 0.15; // Ghost for unconfirmed
+
+      // Skeleton lines
+      if (showSkeleton) {
+        ctx.strokeStyle = color;
+        ctx.lineWidth = confirmed ? 2 : 1;
+        ctx.globalAlpha = alpha;
+        for (const [a, b] of POSE_CONNECTIONS) {
+          if (lm[a] && lm[b] && (lm[a].visibility ?? 1) > 0.3 && (lm[b].visibility ?? 1) > 0.3) {
+            ctx.beginPath();
+            ctx.moveTo(lm[a].x * w, lm[a].y * h);
+            ctx.lineTo(lm[b].x * w, lm[b].y * h);
+            ctx.stroke();
+          }
+        }
+        ctx.globalAlpha = 1;
+      }
+
+      // Landmarks
+      if (showPoints && confirmed) {
+        ctx.fillStyle = color;
+        ctx.globalAlpha = alpha;
+        for (const pt of lm) {
+          if ((pt.visibility ?? 1) > 0.3) {
+            ctx.beginPath();
+            ctx.arc(pt.x * w, pt.y * h, 3, 0, Math.PI * 2);
+            ctx.fill();
+          }
+        }
+        ctx.globalAlpha = 1;
+      }
+
+      // Bounding box
+      if (showBbox) {
+        let minX = 1, minY = 1, maxX = 0, maxY = 0;
+        for (const pt of lm) {
+          if ((pt.visibility ?? 1) > 0.3) {
+            if (pt.x < minX) minX = pt.x;
+            if (pt.y < minY) minY = pt.y;
+            if (pt.x > maxX) maxX = pt.x;
+            if (pt.y > maxY) maxY = pt.y;
+          }
+        }
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 1.5;
+        ctx.globalAlpha = confirmed ? 1 : 0.25;
+        ctx.setLineDash(confirmed ? [4, 4] : [2, 6]);
+        ctx.strokeRect(minX * w, minY * h, (maxX - minX) * w, (maxY - minY) * h);
+        ctx.setLineDash([]);
+
+        ctx.font = '12px monospace';
+        ctx.fillStyle = color;
+        const label = confirmed
+          ? `Person #${track.id} (${track.frames}f)`
+          : `? #${track.id} (${track.frames}/${MIN_FRAMES}f)`;
+        ctx.fillText(label, minX * w, minY * h - 4);
+        ctx.globalAlpha = 1;
+      }
+
+      if (confirmed) confirmedCount++;
+    }
+
+    if (confirmedCount > 0 && frameCount === 1) {
+      addLog(`${confirmedCount} confirmed pose(s) — inference ${inferMs}ms`, 'log-human');
+    }
+  } else {
+    updateTracks([], globalFrame); // Decay stale tracks
+  }
+
+  document.getElementById('st-infer').textContent = `${inferMs}ms`;
+  document.getElementById('st-poses').textContent = confirmedCount;
+  document.getElementById('st-raw').textContent = result.landmarks?.length || 0;
+
+  requestAnimationFrame(detectLoop);
+}
+
+// Wire controls
+// SD/HD toggle
+async function switchQuality(hd) {
+  useHd = hd;
+  document.getElementById('sd-btn').classList.toggle('active', !hd);
+  document.getElementById('hd-btn').classList.toggle('active', hd);
+  if (running) {
+    const camId = document.getElementById('cam-select').value;
+    addLog(`Switching to ${hd ? 'HD' : 'SD'}...`, 'log-info');
+    await connectCamera(camId);
+  }
+}
+document.getElementById('sd-btn').addEventListener('click', () => switchQuality(false));
+document.getElementById('hd-btn').addEventListener('click', () => switchQuality(true));
+
+document.getElementById('start-btn').addEventListener('click', async () => {
+  const camId = document.getElementById('cam-select').value;
+  if (!camId) return;
+  running = true;
+  document.getElementById('start-btn').style.display = 'none';
+  document.getElementById('stop-btn').style.display = '';
+  document.getElementById('stop-btn').classList.add('active');
+  await connectCamera(camId);
+  addLog(`Starting detection on ${camId} (${useHd ? 'HD' : 'SD'})...`);
+  detectLoop();
+});
+
+document.getElementById('stop-btn').addEventListener('click', () => {
+  running = false;
+  document.getElementById('start-btn').style.display = '';
+  document.getElementById('stop-btn').style.display = 'none';
+  if (currentPc) { currentPc.close(); currentPc = null; }
+  if (currentHdStream) {
+    fetch(`/backend/hd-stream/${encodeURIComponent(currentHdStream)}`, { method: 'DELETE' }).catch(() => {});
+    currentHdStream = null;
+  }
+  if (video) video.srcObject = null;
+  ctx?.clearRect(0, 0, canvas?.width || 0, canvas?.height || 0);
+  tracks.length = 0;
+  globalFrame = 0;
+  addLog('Stopped');
+});
+
+document.getElementById('max-poses').addEventListener('input', (e) => {
+  document.getElementById('max-poses-val').textContent = e.target.value;
+  if (poseLandmarker) {
+    poseLandmarker.setOptions({ numPoses: parseInt(e.target.value) });
+    addLog(`Max poses → ${e.target.value}`, 'log-info');
+  }
+});
+
+document.getElementById('confidence').addEventListener('input', (e) => {
+  document.getElementById('confidence-val').textContent = parseFloat(e.target.value).toFixed(2);
+  if (poseLandmarker) {
+    const v = parseFloat(e.target.value);
+    poseLandmarker.setOptions({ minPoseDetectionConfidence: v, minTrackingConfidence: v });
+    addLog(`Confidence → ${v.toFixed(2)}`, 'log-info');
+  }
+});
+
+document.getElementById('confirm-frames').addEventListener('input', (e) => {
+  MIN_FRAMES = parseInt(e.target.value);
+  document.getElementById('confirm-frames-val').textContent = `${MIN_FRAMES}f`;
+});
+
+document.getElementById('model-select').addEventListener('change', (e) => {
+  loadModel(e.target.value);
+});
+
+// Init
+loadCameras();
+loadModel('lite');
+
+// Switch camera on select change (if running)
+document.getElementById('cam-select').addEventListener('change', async () => {
+  if (running) {
+    const camId = document.getElementById('cam-select').value;
+    addLog(`Switching to ${camId}...`, 'log-info');
+    await connectCamera(camId);
+  }
+});
+
+// Cleanup on page close
+window.addEventListener('beforeunload', () => {
+  if (currentHdStream) {
+    fetch(`/backend/hd-stream/${encodeURIComponent(currentHdStream)}`, {
+      method: 'DELETE', keepalive: true
+    }).catch(() => {});
+  }
+});
+</script>
+</body>
+</html>
