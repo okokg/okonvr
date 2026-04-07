@@ -6,7 +6,7 @@ dist/
 monitor/
 nginx/.htpasswd
 *.db
-*.sh
+monitor.sh
 oko.yaml
 .env
 .htpasswd
