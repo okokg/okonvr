@@ -42,8 +42,7 @@ Automatically detects browser H.265 capability and streams HEVC directly without
 ```bash
 git clone https://github.com/okokg/okonvr.git
 cd okonvr
-cp oko.yaml.example oko.yaml
-cp .env.example .env
+./setup.sh
 ```
 
 Edit `oko.yaml` with your NVR credentials:

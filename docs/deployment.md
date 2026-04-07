@@ -12,9 +12,8 @@
 git clone https://github.com/okokg/okonvr.git
 cd okonvr
 
-# Create config from templates
-cp oko.yaml.example oko.yaml
-cp .env.example .env
+# Create config files from templates
+./setup.sh
 
 # Set your NVR credentials
 nano oko.yaml
@@ -22,8 +21,8 @@ nano oko.yaml
 # Set server IP and ports
 nano .env
 
-# Create nginx auth (optional)
-htpasswd -c .htpasswd admin
+# Set nginx password (optional, default: demo/demo)
+./gen-htpasswd.sh admin yourpassword
 ```
 
 ## Docker Compose

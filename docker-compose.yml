@@ -36,8 +36,7 @@ services:
     ports:
       - "${HTTP_PORT:-8888}:80"
     volumes:
-      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
-      - ./nginx/.htpasswd:/etc/nginx/.htpasswd
+      - ./nginx:/etc/nginx/oko:ro
       - ./web:/usr/share/nginx/html
     depends_on:
       - backend
@@ -45,14 +44,17 @@ services:
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
-        if [ -d /etc/nginx/.htpasswd ]; then
-          echo "[oko-nginx] WARNING: .htpasswd is a directory (Docker quirk), creating default"
-          rm -rf /etc/nginx/.htpasswd
+        # Copy nginx.conf from mounted dir
+        cp /etc/nginx/oko/nginx.conf /etc/nginx/nginx.conf
+
+        # Setup .htpasswd — create default if missing
+        if [ -f /etc/nginx/oko/.htpasswd ] && [ -s /etc/nginx/oko/.htpasswd ]; then
+          cp /etc/nginx/oko/.htpasswd /etc/nginx/.htpasswd
+          echo "[oko-nginx] Using .htpasswd from host"
+        else
           echo 'demo:$$apr1$$default$$pljh2huX5l.Y7gWwKFSFB0' > /etc/nginx/.htpasswd
-          echo "[oko-nginx] Created default .htpasswd (demo/demo) — run gen-htpasswd.sh to change"
-        elif [ ! -s /etc/nginx/.htpasswd ]; then
-          echo "[oko-nginx] WARNING: .htpasswd is empty, creating default"
-          echo 'demo:$$apr1$$default$$pljh2huX5l.Y7gWwKFSFB0' > /etc/nginx/.htpasswd
+          echo "[oko-nginx] No .htpasswd found — created default (demo/demo)"
+          echo "[oko-nginx] Run ./gen-htpasswd.sh admin yourpass to set password"
         fi
         exec nginx -g 'daemon off;'
 
