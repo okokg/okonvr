@@ -67,6 +67,12 @@ export class WatchMode {
     this._fsPanelHeader = null;
     this._tracked = new Map(); // id → { cls, label, score, box, smoothBox, lastSeen, firstSeen, cropUrl, nextCropAt }
     this._trackIdCounter = 0;
+
+    // Sound alerts
+    this._soundEnabled = false;
+    this._audioCtx = null;
+    this._soundCooldowns = new Map(); // camId → last sound timestamp
+    this._lastSoundTime = 0;          // global cooldown
   }
 
   // ── Properties ──
@@ -113,6 +119,9 @@ export class WatchMode {
   }
 
   set gridElement(el) { this._gridEl = el; }
+
+  get soundEnabled() { return this._soundEnabled; }
+  set soundEnabled(val) { this._soundEnabled = !!val; }
 
   updateCameras(cameras) {
     this._cameras = cameras;
@@ -223,6 +232,7 @@ export class WatchMode {
         st.lastMotion = now;
         if (wasIdle) {
           this._applyHighlight(cam, st);
+          this._playAlert('motion', cam.id);
           changed = true;
         }
       } else if (st.status === 'motion') {
@@ -367,6 +377,104 @@ export class WatchMode {
     const ids = this.activeCameraIds;
     const summary = this.detectionSummary;
     if (this.onMotionUpdate) this.onMotionUpdate(ids.length, ids, summary);
+  }
+
+  // ── Sound alerts ──
+
+  static SOUND_CAM_COOLDOWN = 10000;  // 10s per camera
+  static SOUND_GLOBAL_COOLDOWN = 400; // 400ms between any sounds
+
+  /**
+   * Play an alert sound for a detection event.
+   * @param {'motion'|'human'|'vehicle'|'animal'} type
+   * @param {string} camId — camera ID for per-camera cooldown
+   */
+  _playAlert(type, camId) {
+    if (!this._soundEnabled) return;
+    const now = Date.now();
+
+    // Global cooldown — avoid cacophony
+    if (now - this._lastSoundTime < WatchMode.SOUND_GLOBAL_COOLDOWN) return;
+
+    // Per-camera cooldown
+    const lastCam = this._soundCooldowns.get(camId) || 0;
+    if (now - lastCam < WatchMode.SOUND_CAM_COOLDOWN) return;
+
+    // Lazy-init AudioContext (requires prior user gesture)
+    if (!this._audioCtx) {
+      try { this._audioCtx = new (window.AudioContext || window.webkitAudioContext)(); }
+      catch { return; }
+    }
+    const ctx = this._audioCtx;
+    if (ctx.state === 'suspended') { ctx.resume().catch(() => {}); return; }
+
+    this._lastSoundTime = now;
+    this._soundCooldowns.set(camId, now);
+
+    if (type === 'motion') this._soundTick(ctx);
+    else if (type === 'human') this._soundHuman(ctx);
+    else if (type === 'vehicle') this._soundVehicle(ctx);
+    else if (type === 'animal') this._soundAnimal(ctx);
+  }
+
+  /** Short click/tick — white noise burst, 25ms */
+  _soundTick(ctx) {
+    const dur = 0.025;
+    const buf = ctx.createBuffer(1, ctx.sampleRate * dur, ctx.sampleRate);
+    const data = buf.getChannelData(0);
+    for (let i = 0; i < data.length; i++) data[i] = (Math.random() * 2 - 1) * 0.3;
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(0.15, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + dur);
+    src.connect(gain).connect(ctx.destination);
+    src.start();
+  }
+
+  /** Two ascending tones — 520Hz + 780Hz, alert feel */
+  _soundHuman(ctx) {
+    const t = ctx.currentTime;
+    [520, 780].forEach((freq, i) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.value = freq;
+      gain.gain.setValueAtTime(0.18, t + i * 0.09);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + i * 0.09 + 0.1);
+      osc.connect(gain).connect(ctx.destination);
+      osc.start(t + i * 0.09);
+      osc.stop(t + i * 0.09 + 0.12);
+    });
+  }
+
+  /** Single lower tone — 350Hz, 80ms */
+  _soundVehicle(ctx) {
+    const t = ctx.currentTime;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'triangle';
+    osc.frequency.value = 350;
+    gain.gain.setValueAtTime(0.15, t);
+    gain.gain.exponentialRampToValueAtTime(0.001, t + 0.08);
+    osc.connect(gain).connect(ctx.destination);
+    osc.start(t);
+    osc.stop(t + 0.1);
+  }
+
+  /** Short high chirp — 1200Hz→900Hz, 60ms */
+  _soundAnimal(ctx) {
+    const t = ctx.currentTime;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(1200, t);
+    osc.frequency.exponentialRampToValueAtTime(900, t + 0.06);
+    gain.gain.setValueAtTime(0.12, t);
+    gain.gain.exponentialRampToValueAtTime(0.001, t + 0.06);
+    osc.connect(gain).connect(ctx.destination);
+    osc.start(t);
+    osc.stop(t + 0.08);
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -523,6 +631,10 @@ export class WatchMode {
       });
       this._activeDetector = 'effnet';
       this._fsDrawOverlay();
+      if (rawDets.length > 0 && this._fsCam) {
+        const type = this._getPrimaryType(rawDets);
+        if (type !== 'unknown') this._playAlert(type, this._fsCam.id);
+      }
     }
     this._fsRafId = setTimeout(() => this._fsLoop(), WatchMode.FS_DETECT_INTERVAL);
   }
@@ -635,6 +747,10 @@ export class WatchMode {
         this._fsDetections = data.detections;
         this._activeDetector = 'coral';
         this._fsDrawOverlay();
+        if (data.detections.length > 0) {
+          const type = this._getPrimaryType(data.detections);
+          if (type !== 'unknown') this._playAlert(type, data.camera);
+        }
       }
     }
   }

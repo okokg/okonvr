@@ -841,6 +841,12 @@ export class App {
       if (this.watchMode) this.watchMode.motionFilter = filterCb.checked;
     });
 
+    // Sound alerts toggle
+    const soundCb = document.getElementById('watch-sound');
+    soundCb?.addEventListener('change', () => {
+      if (this.watchMode) this.watchMode.soundEnabled = soundCb.checked;
+    });
+
     // Type filters (Motion + AI types)
     const _syncTypeFilters = () => {
       if (!this.watchMode) return;
